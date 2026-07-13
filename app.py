@@ -42,7 +42,24 @@ def create_initial_data():
             scheduled_minute = np.random.choice([0, 15, 30, 45])
             scheduled_time = f"{scheduled_hour:02d}:{scheduled_minute:02d}"
             if np.random.rand() > 0.3:
-                actual_hour =
+                actual_hour = np.random.randint(8, 11)
+                actual_minute = np.random.choice([0, 15, 30, 45])
+                actual_time = f"{actual_hour:02d}:{actual_minute:02d}"
+ else:
+                actual_time = ""
+            if actual_time:
+                status = "지각" if int(actual_time.split(":")[0]) >= 10 else "출근완료"
+            else:
+                r = np.random.rand()
+                status = "결근" if r > 0.9 else ("휴무" if r > 0.7 else "")
+            data.append({
+                "날짜": today, "부서": dept,
+                "이름": f"{dept}_{i:03d}",
+                "출근예정시간": scheduled_time,
+                "실제출근시간": actual_time,
+                "근무상태": status, "비고": ""
+            })
+    return pd.DataFrame(data)
 def load_data():
     if 'attendance_df' not in st.session_state:
         DATA_DIR.mkdir(exist_ok=True)
