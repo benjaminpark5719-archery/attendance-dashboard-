@@ -45,7 +45,7 @@ def create_initial_data():
                 actual_hour = np.random.randint(8, 11)
                 actual_minute = np.random.choice([0, 15, 30, 45])
                 actual_time = f"{actual_hour:02d}:{actual_minute:02d}"
- else:
+            else:
                 actual_time = ""
             if actual_time:
                 status = "지각" if int(actual_time.split(":")[0]) >= 10 else "출근완료"
