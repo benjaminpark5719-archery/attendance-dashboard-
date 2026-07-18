@@ -1,20 +1,20 @@
 """
 =================================================================
-보물섬수산 출근현황 관리 HR 시스템 v2.0
-Supabase REST API (HTTPS) 방식 — 포트 연결 문제 원천 차단
+보물섬수산 출근현황 관리 HR 시스템 v2.1
+Supabase REST API / 25개 인사항목 / TBM 안전관리
 =================================================================
 """
 import streamlit as st
 import pandas as pd
 import requests
+import base64
 from datetime import datetime, date
 import io
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
-# ─── 페이지 설정 ─────────────────────────────────────────────
 st.set_page_config(page_title="보물섬수산 HR", page_icon="🐟", layout="wide")
 
-# ─── Supabase REST API 설정 ──────────────────────────────────
+# ─── Supabase REST API ───────────────────────────────────────
 SB_URL = st.secrets["supabase"]["url"]
 SB_KEY = st.secrets["supabase"]["key"]
 HEADERS = {
@@ -23,562 +23,477 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# ─── DB 유틸 함수 ────────────────────────────────────────────
-
 def sb_select(table, params="", order=""):
-    """테이블 조회"""
     url = f"{SB_URL}/rest/v1/{table}?select=*"
-    if params:
-        url += f"&{params}"
-    if order:
-        url += f"&order={order}"
+    if params: url += f"&{params}"
+    if order: url += f"&order={order}"
     r = requests.get(url, headers=HEADERS)
-    return r.json() if r.ok else []
+    return r.json() if r.ok and r.text.strip() else []
 
 def sb_insert(table, data):
-    """단건/다건 삽입"""
-    r = requests.post(
-        f"{SB_URL}/rest/v1/{table}",
-        json=data, headers={**HEADERS, "Prefer": "return=representation"}
-    )
+    r = requests.post(f"{SB_URL}/rest/v1/{table}", json=data,
+                      headers={**HEADERS, "Prefer": "return=representation"})
     return r.ok, r.text
 
 def sb_upsert(table, data, on_conflict):
-    """UPSERT (있으면 업데이트, 없으면 삽입)"""
-    r = requests.post(
-        f"{SB_URL}/rest/v1/{table}?on_conflict={on_conflict}",
-        json=data,
-        headers={**HEADERS, "Prefer": "return=representation,resolution=merge-duplicates"}
-    )
+    r = requests.post(f"{SB_URL}/rest/v1/{table}?on_conflict={on_conflict}",
+                      json=data,
+                      headers={**HEADERS, "Prefer": "return=representation,resolution=merge-duplicates"})
     return r.ok, r.text
 
 def sb_update(table, data, filters):
-    """조건부 업데이트"""
-    r = requests.patch(
-        f"{SB_URL}/rest/v1/{table}?{filters}",
-        json=data, headers={**HEADERS, "Prefer": "return=representation"}
-    )
+    r = requests.patch(f"{SB_URL}/rest/v1/{table}?{filters}", json=data,
+                       headers={**HEADERS, "Prefer": "return=representation"})
     return r.ok, r.text
 
 def sb_delete(table, filters):
-    """조건부 삭제"""
-    r = requests.delete(
-        f"{SB_URL}/rest/v1/{table}?{filters}", headers=HEADERS
-    )
+    r = requests.delete(f"{SB_URL}/rest/v1/{table}?{filters}", headers=HEADERS)
     return r.ok
 
-def sb_health_check():
-    """DB 연결 상태 확인"""
+def sb_health():
     try:
-        r = requests.get(
-            f"{SB_URL}/rest/v1/departments?select=count",
-            headers={**HEADERS, "Prefer": "count=exact"},
-            timeout=5
-        )
+        r = requests.get(f"{SB_URL}/rest/v1/departments?select=name", headers=HEADERS, timeout=5)
         return r.ok
-    except Exception:
-        return False
-
-# ─── 초기 데이터 세팅 ────────────────────────────────────────
-
-DEFAULT_DEPTS = ["회계부", "회주방", "식당 홀", "식당 주방",
-                 "배송팀", "물류팀", "해썹가공공장", "마트 입점팀"]
-
-def init_departments():
-    """기본 부서 데이터 삽입 (중복 무시)"""
-    existing = sb_select("departments")
-    existing_names = {d["name"] for d in existing}
-    new_depts = [{"name": n} for n in DEFAULT_DEPTS if n not in existing_names]
-    if new_depts:
-        sb_insert("departments", new_depts)
-
-# ─── 로그인 ──────────────────────────────────────────────────
+    except: return False
 
 STATUS_OPTIONS = ["출근완료", "지각", "결근", "휴무", "조퇴"]
+DEFAULT_DEPTS = ["회계부","회주방","식당 홀","식당 주방","배송팀","물류팀","해썹가공공장","마트 입점팀"]
+
+def init_departments():
+    existing = sb_select("departments")
+    names = {d["name"] for d in existing}
+    new = [{"name": n} for n in DEFAULT_DEPTS if n not in names]
+    if new: sb_insert("departments", new)
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
+# ─── 엑셀 다운로드 ──────────────────────────────────────────
+def to_excel(df, sheet='데이터'):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as w:
+        df.to_excel(w, sheet_name=sheet, index=False)
+        ws = w.sheets[sheet]
+        hf = PatternFill(start_color="1a365d", end_color="1a365d", fill_type="solid")
+        hfn = Font(bold=True, color="FFFFFF", size=11)
+        tb = Border(left=Side(style='thin'),right=Side(style='thin'),
+                    top=Side(style='thin'),bottom=Side(style='thin'))
+        for c in ws[1]: c.fill=hf; c.font=hfn; c.alignment=Alignment(horizontal="center")
+        for row in ws.iter_rows(min_row=2,max_row=len(df)+1):
+            for c in row: c.border=tb; c.alignment=Alignment(horizontal="center")
+        for col in ws.columns:
+            ml = max((len(str(c.value)) for c in col if c.value), default=0)
+            ws.column_dimensions[col[0].column_letter].width = min(ml+4, 25)
+    out.seek(0)
+    return out.getvalue()
+
+# ─── 로그인 ──────────────────────────────────────────────────
 def show_login():
-    st.markdown("<div style='text-align:center; margin-top:3rem;'>"
+    st.markdown("<div style='text-align:center;margin-top:3rem'>"
                 "<h1>🐟 보물섬수산</h1>"
-                "<h3 style='color:#64748b;'>출근현황 관리 HR 시스템</h3>"
-                "</div>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    with col2:
+                "<h3 style='color:#64748b'>출근현황 관리 HR 시스템</h3></div>",
+                unsafe_allow_html=True)
+    c1,c2,c3 = st.columns([1,1.2,1])
+    with c2:
         st.markdown("---")
-        with st.form("login_form"):
-            username = st.text_input("아이디", value="admin")
-            password = st.text_input("비밀번호", type="password")
-            submitted = st.form_submit_button("로그인", use_container_width=True, type="primary")
-        if submitted:
-            if username == "admin" and password == "admin1234!":
-                st.session_state['logged_in'] = True
-                st.rerun()
-            else:
-                st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+        with st.form("login"):
+            u = st.text_input("아이디", value="admin")
+            p = st.text_input("비밀번호", type="password")
+            if st.form_submit_button("로그인", use_container_width=True, type="primary"):
+                if u=="admin" and p=="admin1234!":
+                    st.session_state['logged_in']=True; st.rerun()
+                else: st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
         st.caption("초기 계정: admin / admin1234!")
 
-# ─── 엑셀 다운로드 헬퍼 ──────────────────────────────────────
-
-def to_excel(df, sheet_name='데이터'):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
-        ws = writer.sheets[sheet_name]
-        hfill = PatternFill(start_color="1a365d", end_color="1a365d", fill_type="solid")
-        hfont = Font(bold=True, color="FFFFFF", size=11)
-        thin = Border(left=Side(style='thin'), right=Side(style='thin'),
-                      top=Side(style='thin'), bottom=Side(style='thin'))
-        for cell in ws[1]:
-            cell.fill = hfill
-            cell.font = hfont
-            cell.alignment = Alignment(horizontal="center")
-        for row in ws.iter_rows(min_row=2, max_row=len(df)+1):
-            for cell in row:
-                cell.border = thin
-                cell.alignment = Alignment(horizontal="center")
-        for col in ws.columns:
-            max_len = max((len(str(c.value)) for c in col if c.value), default=0)
-            ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 25)
-    output.seek(0)
-    return output.getvalue()
-
 # ═══════════════════════════════════════════════════════════════
-#  메뉴 1: 📊 전사 출근 현황
+#  📊 전사현황
 # ═══════════════════════════════════════════════════════════════
-
 def page_dashboard():
     st.title("📊 전사 출근 현황")
-    target_date = st.date_input("기준일", value=date.today())
-    target_str = target_date.strftime("%Y-%m-%d")
-
-    employees = sb_select("employees", order="dept_name,emp_no")
-    attendance = sb_select("attendance", f"date=eq.{target_str}")
-
-    if not employees:
-        st.info("등록된 직원이 없습니다. '직원관리' 메뉴에서 엑셀 업로드를 먼저 해주세요.")
-        return
-
-    att_map = {a["emp_no"]: a for a in attendance}
-    depts = sb_select("departments", order="name")
-    dept_names = [d["name"] for d in depts]
-
-    # 부서별 통계
-    stats = []
-    total = {"부서": "합계", "총인원": 0, "출근완료": 0, "지각": 0, "결근": 0, "휴무": 0, "미입력": 0}
-    for dept in dept_names:
-        dept_emps = [e for e in employees if e["dept_name"] == dept]
-        if not dept_emps:
-            continue
-        cnt = len(dept_emps)
-        completed = sum(1 for e in dept_emps if att_map.get(e["emp_no"], {}).get("status") == "출근완료")
-        late = sum(1 for e in dept_emps if att_map.get(e["emp_no"], {}).get("status") == "지각")
-        absent = sum(1 for e in dept_emps if att_map.get(e["emp_no"], {}).get("status") == "결근")
-        off = sum(1 for e in dept_emps if att_map.get(e["emp_no"], {}).get("status") == "휴무")
-        no_input = cnt - completed - late - absent - off
-        working = cnt - off
-        rate = f"{round(completed / working * 100, 1)}%" if working > 0 else "0%"
-        row = {"부서": dept, "총인원": cnt, "출근완료": completed, "지각": late,
-               "결근": absent, "휴무": off, "미입력": no_input, "출근율": rate}
+    td = st.date_input("기준일", value=date.today())
+    ts = td.strftime("%Y-%m-%d")
+    emps = sb_select("employees","employment_status=eq.재직",order="dept_name,emp_no")
+    atts = sb_select("attendance",f"date=eq.{ts}")
+    if not emps:
+        st.info("등록된 직원이 없습니다. '직원관리'에서 먼저 등록하세요."); return
+    am = {a["emp_no"]:a for a in atts}
+    depts = sorted(set(e["dept_name"] for e in emps))
+    stats=[]
+    tot={"부서":"합계","총인원":0,"출근완료":0,"지각":0,"결근":0,"휴무":0,"미입력":0}
+    for d in depts:
+        de=[e for e in emps if e["dept_name"]==d]
+        n=len(de)
+        comp=sum(1 for e in de if am.get(e["emp_no"],{}).get("status")=="출근완료")
+        late=sum(1 for e in de if am.get(e["emp_no"],{}).get("status")=="지각")
+        abst=sum(1 for e in de if am.get(e["emp_no"],{}).get("status")=="결근")
+        off=sum(1 for e in de if am.get(e["emp_no"],{}).get("status")=="휴무")
+        ni=n-comp-late-abst-off
+        w=n-off
+        r=f"{round(comp/w*100,1)}%" if w>0 else "0%"
+        row={"부서":d,"총인원":n,"출근완료":comp,"지각":late,"결근":abst,"휴무":off,"미입력":ni,"출근율":r}
         stats.append(row)
-        for k in total:
-            if k not in ("부서", "출근율"):
-                total[k] = total.get(k, 0) + row.get(k, 0)
-
-    working_total = total["총인원"] - total["휴무"]
-    total["출근율"] = f"{round(total['출근완료'] / working_total * 100, 1)}%" if working_total > 0 else "0%"
-    stats.append(total)
-
-    # KPI
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("출근율", total.get("출근율", "0%"))
-    c2.metric("출근완료", f"{total.get('출근완료', 0)}명")
-    c3.metric("지각", f"{total.get('지각', 0)}명")
-    c4.metric("결근", f"{total.get('결근', 0)}명")
-    c5.metric("미입력", f"{total.get('미입력', 0)}명")
-
+        for k in tot:
+            if k not in("부서","출근율"): tot[k]+=row.get(k,0)
+    wt=tot["총인원"]-tot["휴무"]
+    tot["출근율"]=f"{round(tot['출근완료']/wt*100,1)}%" if wt>0 else "0%"
+    stats.append(tot)
+    c1,c2,c3,c4,c5=st.columns(5)
+    c1.metric("출근율",tot["출근율"]); c2.metric("출근완료",f"{tot['출근완료']}명")
+    c3.metric("지각",f"{tot['지각']}명"); c4.metric("결근",f"{tot['결근']}명")
+    c5.metric("미입력",f"{tot['미입력']}명")
     st.markdown("---")
-    st.subheader("부서별 상세")
-    st.dataframe(pd.DataFrame(stats), use_container_width=True, hide_index=True)
-
-    # 전체 직원 리스트
+    st.dataframe(pd.DataFrame(stats),use_container_width=True,hide_index=True)
     st.markdown("---")
-    st.subheader("전체 직원 상세")
-    detail = []
-    for e in employees:
-        a = att_map.get(e["emp_no"], {})
-        detail.append({
-            "부서": e["dept_name"], "사번": e["emp_no"], "이름": e["name"],
-            "출근예정": e.get("scheduled_time", "09:00"),
-            "실제출근": a.get("actual_time", ""),
-            "상태": a.get("status", "미입력"),
-        })
-    detail_df = pd.DataFrame(detail)
-    st.dataframe(detail_df, use_container_width=True, hide_index=True, height=400)
-
-    st.download_button(
-        "📥 엑셀 다운로드", to_excel(detail_df, "출근현황"),
-        f"출근현황_{target_str}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    detail=[]
+    for e in emps:
+        a=am.get(e["emp_no"],{})
+        detail.append({"부서":e["dept_name"],"사번":e["emp_no"],"이름":e["name"],
+                        "직급":e.get("position",""),"출근예정":e.get("scheduled_time",""),
+                        "실제출근":a.get("actual_time",""),"상태":a.get("status","미입력")})
+    ddf=pd.DataFrame(detail)
+    st.dataframe(ddf,use_container_width=True,hide_index=True,height=400)
+    st.download_button("📥 엑셀 다운로드",to_excel(ddf,"출근현황"),
+                       f"출근현황_{ts}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ═══════════════════════════════════════════════════════════════
-#  메뉴 2: 📋 출근 입력
+#  📋 출근입력
 # ═══════════════════════════════════════════════════════════════
-
-def page_attendance_input():
+def page_attendance():
     st.title("📋 부서별 출근 현황 입력")
-    target_date = st.date_input("날짜", value=date.today())
-    target_str = target_date.strftime("%Y-%m-%d")
-
-    depts = sb_select("departments", order="name")
-    if not depts:
-        st.warning("등록된 부서가 없습니다.")
-        return
-
-    dept_names = [d["name"] for d in depts]
-    selected_dept = st.selectbox("🏢 부서 선택", dept_names)
-
-    employees = sb_select("employees", f"dept_name=eq.{selected_dept}", order="emp_no")
-    if not employees:
-        st.info(f"{selected_dept}에 등록된 직원이 없습니다.")
-        return
-
-    attendance = sb_select("attendance", f"date=eq.{target_str}")
-    att_map = {a["emp_no"]: a for a in attendance}
-
-    st.markdown(f"**{selected_dept}** — {len(employees)}명")
+    td=st.date_input("날짜",value=date.today()); ts=td.strftime("%Y-%m-%d")
+    depts=sb_select("departments",order="name")
+    if not depts: st.warning("부서 없음"); return
+    sel=st.selectbox("🏢 부서 선택",[d["name"] for d in depts])
+    emps=sb_select("employees",f"dept_name=eq.{sel}&employment_status=eq.재직",order="emp_no")
+    if not emps: st.info(f"{sel}에 직원 없음"); return
+    atts=sb_select("attendance",f"date=eq.{ts}")
+    am={a["emp_no"]:a for a in atts}
+    st.markdown(f"**{sel}** — {len(emps)}명"); st.divider()
+    nd={}
+    for emp in emps:
+        ex=am.get(emp["emp_no"],{})
+        c1,c2,c3,c4=st.columns([2,1.5,1.2,1.5])
+        c1.write(f"👤 {emp['name']}"); c2.write(emp["emp_no"])
+        with c3: at=st.text_input("시간",value=ex.get("actual_time",""),placeholder="HH:MM",
+                                   key=f"a_{emp['emp_no']}",label_visibility="collapsed")
+        with c4:
+            cs=ex.get("status","")
+            idx=(STATUS_OPTIONS.index(cs)+1) if cs in STATUS_OPTIONS else 0
+            s=st.selectbox("상태",[""]+STATUS_OPTIONS,index=idx,
+                           key=f"s_{emp['emp_no']}",label_visibility="collapsed")
+        nd[emp["emp_no"]]={"actual_time":at,"status":s}
     st.markdown("---")
-
-    # 헤더
-    cols = st.columns([1.5, 1.5, 1.2, 1.2, 1.5])
-    for col, h in zip(cols, ["이름", "사번", "출근예정", "실제출근", "근무상태"]):
-        col.markdown(f"**{h}**")
-    st.divider()
-
-    new_data = {}
-    for emp in employees:
-        existing = att_map.get(emp["emp_no"], {})
-        cols = st.columns([1.5, 1.5, 1.2, 1.2, 1.5])
-        with cols[0]:
-            st.write(f"👤 {emp['name']}")
-        with cols[1]:
-            st.write(emp["emp_no"])
-        with cols[2]:
-            st.write(emp.get("scheduled_time", "09:00"))
-        with cols[3]:
-            actual = st.text_input(
-                "시간", value=existing.get("actual_time", ""),
-                placeholder="HH:MM", key=f"at_{emp['emp_no']}",
-                label_visibility="collapsed"
-            )
-        with cols[4]:
-            current_status = existing.get("status", "")
-            idx = (STATUS_OPTIONS.index(current_status) + 1) if current_status in STATUS_OPTIONS else 0
-            status = st.selectbox(
-                "상태", [""] + STATUS_OPTIONS, index=idx,
-                key=f"st_{emp['emp_no']}", label_visibility="collapsed"
-            )
-        new_data[emp["emp_no"]] = {"actual_time": actual, "status": status}
-
-    st.markdown("---")
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c2:
-        if st.button("💾 저장", use_container_width=True, type="primary"):
-            records = []
-            for emp_no, vals in new_data.items():
-                if vals["status"]:  # 상태가 선택된 것만
-                    records.append({
-                        "date": target_str,
-                        "emp_no": emp_no,
-                        "actual_time": vals["actual_time"],
-                        "status": vals["status"]
-                    })
-            if records:
-                ok, msg = sb_upsert("attendance", records, "date,emp_no")
-                if ok:
-                    st.success(f"✅ {len(records)}명의 출근 기록이 저장되었습니다!")
-                    st.rerun()
-                else:
-                    st.error(f"저장 실패: {msg}")
-            else:
-                st.warning("저장할 데이터가 없습니다. 근무상태를 선택해 주세요.")
+    _,cb,_=st.columns([1,1,1])
+    with cb:
+        if st.button("💾 저장",use_container_width=True,type="primary"):
+            recs=[{"date":ts,"emp_no":k,"actual_time":v["actual_time"],"status":v["status"]}
+                  for k,v in nd.items() if v["status"]]
+            if recs:
+                ok,msg=sb_upsert("attendance",recs,"date,emp_no")
+                if ok: st.success(f"✅ {len(recs)}명 저장 완료!"); st.rerun()
+                else: st.error(f"실패: {msg}")
+            else: st.warning("상태를 선택하세요.")
 
 # ═══════════════════════════════════════════════════════════════
-#  메뉴 3: 🔍 이력 조회
+#  🔍 이력조회
 # ═══════════════════════════════════════════════════════════════
-
 def page_history():
     st.title("🔍 출근 이력 조회")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        date_from = st.date_input("시작일", value=date.today().replace(day=1))
-    with c2:
-        date_to = st.date_input("종료일", value=date.today())
+    c1,c2,c3=st.columns(3)
+    with c1: df_=st.date_input("시작일",value=date.today().replace(day=1))
+    with c2: dt_=st.date_input("종료일",value=date.today())
     with c3:
-        depts = sb_select("departments", order="name")
-        dept_options = ["전체"] + [d["name"] for d in depts]
-        sel_dept = st.selectbox("부서", dept_options)
-
-    filters = f"date=gte.{date_from}&date=lte.{date_to}"
-    logs = sb_select("attendance", filters, order="date.desc,emp_no")
-
-    if not logs:
-        st.info("해당 기간의 출근 이력이 없습니다.")
-        return
-
-    employees = sb_select("employees")
-    emp_map = {e["emp_no"]: e for e in employees}
-
-    rows = []
-    for log in logs:
-        emp = emp_map.get(log["emp_no"], {})
-        dept = emp.get("dept_name", "-")
-        if sel_dept != "전체" and dept != sel_dept:
-            continue
-        rows.append({
-            "날짜": log["date"], "부서": dept,
-            "사번": log["emp_no"], "이름": emp.get("name", "-"),
-            "출근예정": emp.get("scheduled_time", ""),
-            "실제출근": log.get("actual_time", ""),
-            "상태": log.get("status", ""),
-        })
-
+        dpts=sb_select("departments",order="name")
+        sd=st.selectbox("부서",["전체"]+[d["name"] for d in dpts])
+    logs=sb_select("attendance",f"date=gte.{df_}&date=lte.{dt_}",order="date.desc,emp_no")
+    if not logs: st.info("이력 없음"); return
+    emap={e["emp_no"]:e for e in sb_select("employees")}
+    rows=[]
+    for l in logs:
+        e=emap.get(l["emp_no"],{})
+        d=e.get("dept_name","-")
+        if sd!="전체" and d!=sd: continue
+        rows.append({"날짜":l["date"],"부서":d,"사번":l["emp_no"],"이름":e.get("name","-"),
+                      "실제출근":l.get("actual_time",""),"상태":l.get("status","")})
     if rows:
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True, height=500)
+        rdf=pd.DataFrame(rows)
+        st.dataframe(rdf,use_container_width=True,hide_index=True,height=500)
         st.caption(f"총 {len(rows)}건")
-        st.download_button(
-            "📥 엑셀 다운로드", to_excel(df, "출근이력"),
-            f"출근이력_{date_from}_{date_to}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.info("필터 조건에 맞는 이력이 없습니다.")
+        st.download_button("📥 엑셀",to_excel(rdf,"이력"),f"출근이력_{df_}_{dt_}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ═══════════════════════════════════════════════════════════════
-#  메뉴 4: 🏢 부서 관리
+#  🏢 부서관리
 # ═══════════════════════════════════════════════════════════════
-
 def page_departments():
     st.title("🏢 부서 관리")
-
-    tab1, tab2 = st.tabs(["📋 부서 목록", "➕ 부서 등록"])
-
-    with tab1:
-        depts = sb_select("departments", order="name")
-        if depts:
-            for dept in depts:
-                employees = sb_select("employees", f"dept_name=eq.{dept['name']}")
-                emp_count = len(employees)
-                c1, c2, c3 = st.columns([3, 1, 1])
-                c1.write(f"🏢 **{dept['name']}** — 직원 {emp_count}명")
-                with c3:
-                    if emp_count == 0:
-                        if st.button("🗑️ 삭제", key=f"del_{dept['id']}"):
-                            sb_delete("departments", f"id=eq.{dept['id']}")
-                            st.success(f"{dept['name']} 삭제 완료")
-                            st.rerun()
-                    else:
-                        st.caption("삭제불가")
-        else:
-            st.info("등록된 부서가 없습니다.")
-
-    with tab2:
-        with st.form("new_dept"):
-            new_name = st.text_input("새 부서명")
-            if st.form_submit_button("➕ 등록", type="primary"):
-                if new_name:
-                    ok, msg = sb_insert("departments", {"name": new_name.strip()})
-                    if ok:
-                        st.success(f"'{new_name}' 부서가 등록되었습니다.")
-                        st.rerun()
-                    else:
-                        st.error(f"등록 실패 (중복?): {msg}")
-                else:
-                    st.warning("부서명을 입력하세요.")
+    t1,t2=st.tabs(["📋 목록","➕ 등록"])
+    with t1:
+        for d in sb_select("departments",order="name"):
+            ec=len(sb_select("employees",f"dept_name=eq.{d['name']}"))
+            c1,c2=st.columns([4,1])
+            c1.write(f"🏢 **{d['name']}** — {ec}명")
+            with c2:
+                if ec==0:
+                    if st.button("🗑️",key=f"dd_{d['id']}"):
+                        sb_delete("departments",f"id=eq.{d['id']}"); st.rerun()
+    with t2:
+        with st.form("nd"):
+            nn=st.text_input("부서명")
+            if st.form_submit_button("➕ 등록",type="primary"):
+                if nn:
+                    ok,_=sb_insert("departments",{"name":nn.strip()})
+                    if ok: st.success("등록 완료"); st.rerun()
+                    else: st.error("중복 또는 오류")
 
 # ═══════════════════════════════════════════════════════════════
-#  메뉴 5: 👤 직원 관리 (엑셀 업로드)
+#  👤 직원관리
 # ═══════════════════════════════════════════════════════════════
-
 def page_employees():
     st.title("👤 직원 관리")
+    t1,t2,t3,t4=st.tabs(["📋 직원 목록/수정","➕ 직원 추가","📥 엑셀 업로드","🗑️ 삭제"])
 
-    tab1, tab2, tab3 = st.tabs(["📥 엑셀 업로드", "📋 직원 목록", "🗑️ 직원 삭제"])
+    with t1:
+        depts=sb_select("departments",order="name")
+        df_=st.selectbox("부서",["전체"]+[d["name"] for d in depts],key="elf")
+        if df_=="전체": emps=sb_select("employees",order="dept_name,emp_no")
+        else: emps=sb_select("employees",f"dept_name=eq.{df_}",order="emp_no")
+        if not emps: st.info("직원 없음"); return
 
-    with tab1:
-        st.subheader("엑셀/CSV 파일로 직원 일괄 등록")
-        st.markdown("""
-엑셀(또는 CSV) 파일에 아래 4개 컬럼이 있어야 합니다:
+        cols_show=["emp_no","name","dept_name","position","phone","hire_date",
+                    "employment_status","health_cert_expiry","safety_training_date"]
+        cols_label={"emp_no":"사번","name":"이름","dept_name":"부서","position":"직급",
+                     "phone":"연락처","hire_date":"입사일","employment_status":"재직상태",
+                     "health_cert_expiry":"보건증만료","safety_training_date":"안전교육일"}
+        df=pd.DataFrame(emps)
+        # 존재하는 컬럼만 표시
+        avail=[c for c in cols_show if c in df.columns]
+        show_df=df[avail].rename(columns=cols_label)
+        st.dataframe(show_df,use_container_width=True,hide_index=True)
+        st.caption(f"총 {len(emps)}명")
 
-| 사번 | 이름 | 부서 | 출근예정시간 |
-|------|------|------|------------|
-| ACC-001 | 홍길동 | 회계부 | 09:00 |
-| DLV-001 | 김철수 | 배송팀 | 08:00 |
-        """)
+        # 이름 수정
+        st.markdown("---")
+        st.subheader("✏️ 이름 수정")
+        with st.form("edit_name"):
+            c1,c2=st.columns(2)
+            en=c1.text_input("사번",placeholder="예: ACC-01")
+            nn=c2.text_input("새 이름",placeholder="예: 홍길동")
+            if st.form_submit_button("수정",type="primary"):
+                if en and nn:
+                    ok,_=sb_update("employees",{"name":nn.strip()},f"emp_no=eq.{en.strip()}")
+                    if ok: st.success(f"{en} → {nn} 수정 완료"); st.rerun()
+                    else: st.error("사번 확인")
 
-        uploaded = st.file_uploader("파일 선택", type=["xlsx", "csv"])
-        if uploaded:
+    with t2:
+        st.subheader("➕ 직원 1명 추가")
+        with st.form("add1"):
+            c1,c2,c3=st.columns(3)
+            ne=c1.text_input("사번 *")
+            nn=c2.text_input("이름 *")
+            nd=c3.selectbox("부서",[d["name"] for d in depts])
+            c1,c2,c3=st.columns(3)
+            np=c1.selectbox("직급",["","사원","주임","대리","과장","차장","부장","이사","반장"])
+            nt=c2.text_input("출근예정시간",value="09:00")
+            nh=c3.text_input("입사일",placeholder="2025-01-01")
+            c1,c2=st.columns(2)
+            nph=c1.text_input("연락처",placeholder="010-0000-0000")
+            nct=c2.selectbox("계약유형",["정규직","계약직","일용직","파트타임"])
+            if st.form_submit_button("➕ 등록",type="primary"):
+                if ne and nn:
+                    rec={"emp_no":ne.strip(),"name":nn.strip(),"dept_name":nd,
+                         "position":np,"scheduled_time":nt,"hire_date":nh,
+                         "phone":nph,"contract_type":nct,"employment_status":"재직"}
+                    ok,msg=sb_insert("employees",[rec])
+                    if ok: st.success("등록 완료"); st.rerun()
+                    else: st.error(f"실패(사번 중복?): {msg}")
+
+    with t3:
+        st.subheader("📥 엑셀/CSV 일괄 업로드")
+        st.markdown("컬럼: **사번, 이름, 부서, 출근예정시간** (필수) + 직급, 연락처 등 (선택)")
+        up=st.file_uploader("파일 선택",type=["xlsx","csv"])
+        if up:
             try:
-                if uploaded.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded)
-                else:
-                    df = pd.read_excel(uploaded)
+                udf=pd.read_csv(up) if up.name.endswith('.csv') else pd.read_excel(up)
+                req={"사번","이름","부서","출근예정시간"}
+                if not req.issubset(set(udf.columns)):
+                    st.error(f"필수 컬럼 누락: {req-set(udf.columns)}"); return
+                st.dataframe(udf.head(10),use_container_width=True,hide_index=True)
+                st.caption(f"총 {len(udf)}명")
+                if st.button("🚀 DB 저장",type="primary"):
+                    recs=[]
+                    col_map={"사번":"emp_no","이름":"name","부서":"dept_name",
+                             "출근예정시간":"scheduled_time","직급":"position",
+                             "연락처":"phone","입사일":"hire_date","계약유형":"contract_type"}
+                    for _,r in udf.iterrows():
+                        rec={}
+                        for kr,en in col_map.items():
+                            if kr in udf.columns: rec[en]=str(r[kr]).strip()
+                        rec["employment_status"]="재직"
+                        recs.append(rec)
+                    ok,msg=sb_upsert("employees",recs,"emp_no")
+                    if ok: st.success(f"🎉 {len(recs)}명 저장!"); st.rerun()
+                    else: st.error(f"실패: {msg}")
+            except Exception as e: st.error(f"에러: {e}")
 
-                required_cols = {"사번", "이름", "부서", "출근예정시간"}
-                if not required_cols.issubset(set(df.columns)):
-                    st.error(f"필수 컬럼이 없습니다: {required_cols - set(df.columns)}")
-                else:
-                    st.write(f"📊 미리보기 — 총 {len(df)}명:")
-                    st.dataframe(df.head(10), use_container_width=True, hide_index=True)
-
-                    if st.button("🚀 데이터베이스에 저장하기", type="primary"):
-                        records = []
-                        for _, row in df.iterrows():
-                            records.append({
-                                "emp_no": str(row["사번"]).strip(),
-                                "name": str(row["이름"]).strip(),
-                                "dept_name": str(row["부서"]).strip(),
-                                "scheduled_time": str(row["출근예정시간"]).strip()
-                            })
-                        ok, msg = sb_upsert("employees", records, "emp_no")
-                        if ok:
-                            st.success(f"🎉 {len(records)}명이 저장되었습니다!")
-                            st.rerun()
-                        else:
-                            st.error(f"저장 실패: {msg}")
-            except Exception as e:
-                st.error(f"파일 처리 에러: {e}")
-
-    with tab2:
-        st.subheader("등록된 직원 목록")
-        c1, _ = st.columns([1, 3])
-        with c1:
-            depts = sb_select("departments", order="name")
-            dept_filter = st.selectbox("부서 필터", ["전체"] + [d["name"] for d in depts], key="emp_filter")
-
-        if dept_filter == "전체":
-            employees = sb_select("employees", order="dept_name,emp_no")
-        else:
-            employees = sb_select("employees", f"dept_name=eq.{dept_filter}", order="emp_no")
-
-        if employees:
-            df = pd.DataFrame(employees)
-            display_df = df[["emp_no", "name", "dept_name", "scheduled_time"]].rename(
-                columns={"emp_no": "사번", "name": "이름", "dept_name": "부서", "scheduled_time": "출근예정시간"}
-            )
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-            st.caption(f"총 {len(employees)}명")
-        else:
-            st.info("등록된 직원이 없습니다.")
-
-    with tab3:
-        st.subheader("직원 삭제")
-        emp_no_del = st.text_input("삭제할 사번 입력", placeholder="예: ACC-001")
-        if st.button("🗑️ 삭제 실행", type="secondary"):
-            if emp_no_del:
-                ok = sb_delete("employees", f"emp_no=eq.{emp_no_del.strip()}")
-                if ok:
-                    st.success(f"사번 {emp_no_del} 삭제 완료")
-                    st.rerun()
-                else:
-                    st.error("삭제 실패: 사번을 확인하세요.")
+    with t4:
+        st.subheader("🗑️ 직원 삭제")
+        de=st.text_input("삭제할 사번",placeholder="ACC-01")
+        if st.button("삭제 실행"):
+            if de:
+                ok=sb_delete("employees",f"emp_no=eq.{de.strip()}")
+                if ok: st.success("삭제 완료"); st.rerun()
+                else: st.error("사번 확인")
 
 # ═══════════════════════════════════════════════════════════════
-#  메뉴 6: 💰 급여 관리
+#  🦺 TBM 안전관리
 # ═══════════════════════════════════════════════════════════════
+def page_tbm():
+    st.title("🦺 TBM 안전관리")
+    t1,t2,t3=st.tabs(["📝 오늘의 TBM 작성","✅ 직원 확인 현황","📋 TBM 이력"])
 
+    with t1:
+        st.subheader("오늘의 TBM 작성")
+        with st.form("tbm_write"):
+            td=date.today().strftime("%Y-%m-%d")
+            st.write(f"📅 날짜: **{td}**")
+            dept=st.selectbox("대상 부서",[d["name"] for d in sb_select("departments",order="name")])
+            title=st.text_input("TBM 제목",placeholder="예: 수조 주변 미끄럼 주의")
+            content=st.text_area("교육 내용",height=200,
+                                 placeholder="1. 오늘의 작업 내용\n2. 위험 요인\n3. 안전 대책\n4. 주의사항")
+            photo=st.file_uploader("📸 교육 현장 사진 (선택)",type=["jpg","jpeg","png"])
+            if st.form_submit_button("💾 TBM 저장",type="primary"):
+                if not title: st.error("제목을 입력하세요"); return
+                photo_b64=""
+                if photo:
+                    raw=photo.read()
+                    if len(raw)>3*1024*1024: st.error("사진 3MB 이하만 가능"); return
+                    photo_b64=base64.b64encode(raw).decode()
+                rec={"tbm_date":td,"department":dept,"title":title.strip(),
+                     "content":content,"photo_data":photo_b64,"created_by":"admin"}
+                ok,msg=sb_insert("tbm_records",[rec])
+                if ok: st.success("✅ TBM이 등록되었습니다. 직원들이 확인할 수 있습니다!"); st.rerun()
+                else: st.error(f"실패: {msg}")
+
+    with t2:
+        st.subheader("직원 확인 현황")
+        today_tbms=sb_select("tbm_records",f"tbm_date=eq.{date.today().strftime('%Y-%m-%d')}",
+                              order="created_at.desc")
+        if not today_tbms:
+            st.info("오늘 등록된 TBM이 없습니다. 먼저 TBM을 작성하세요.")
+            return
+
+        for tbm in today_tbms:
+            with st.expander(f"📌 [{tbm['department']}] {tbm['title']}",expanded=True):
+                st.markdown(tbm.get("content","").replace("\n","  \n"))
+                if tbm.get("photo_data"):
+                    try:
+                        st.image(base64.b64decode(tbm["photo_data"]),caption="교육 현장",width=400)
+                    except: pass
+
+                # 확인한 직원 목록
+                confs=sb_select("tbm_confirmations",f"tbm_id=eq.{tbm['id']}")
+                conf_nos={c["emp_no"] for c in confs}
+
+                # 해당 부서 직원
+                dept_emps=sb_select("employees",
+                                    f"dept_name=eq.{tbm['department']}&employment_status=eq.재직",
+                                    order="emp_no")
+
+                st.markdown(f"**확인 현황: {len(conf_nos)}/{len(dept_emps)}명**")
+                for emp in dept_emps:
+                    c1,c2=st.columns([3,1])
+                    if emp["emp_no"] in conf_nos:
+                        c1.write(f"✅ {emp['name']} ({emp['emp_no']})")
+                        c2.write("확인 완료")
+                    else:
+                        c1.write(f"⬜ {emp['name']} ({emp['emp_no']})")
+                        with c2:
+                            if st.button("확인",key=f"cf_{tbm['id']}_{emp['emp_no']}"):
+                                ok,_=sb_insert("tbm_confirmations",[{
+                                    "tbm_id":tbm["id"],"emp_no":emp["emp_no"],
+                                    "emp_name":emp["name"]
+                                }])
+                                if ok: st.rerun()
+
+                # 미확인자 알림
+                uncf=[e for e in dept_emps if e["emp_no"] not in conf_nos]
+                if uncf:
+                    st.warning(f"⚠️ 미확인 {len(uncf)}명: {', '.join(e['name'] for e in uncf)}")
+
+    with t3:
+        st.subheader("TBM 이력")
+        c1,c2=st.columns(2)
+        with c1: hf=st.date_input("시작",value=date.today().replace(day=1),key="tbmf")
+        with c2: ht=st.date_input("종료",value=date.today(),key="tbmt")
+        hist=sb_select("tbm_records",f"tbm_date=gte.{hf}&tbm_date=lte.{ht}",
+                        order="tbm_date.desc,created_at.desc")
+        if hist:
+            for h in hist:
+                confs=sb_select("tbm_confirmations",f"tbm_id=eq.{h['id']}")
+                dept_emps=sb_select("employees",
+                                    f"dept_name=eq.{h['department']}&employment_status=eq.재직")
+                rate=f"{len(confs)}/{len(dept_emps)}" if dept_emps else "0/0"
+                with st.expander(f"📅 {h['tbm_date']} [{h['department']}] {h['title']} — 확인 {rate}"):
+                    st.markdown(h.get("content","").replace("\n","  \n"))
+                    if h.get("photo_data"):
+                        try: st.image(base64.b64decode(h["photo_data"]),width=300)
+                        except: pass
+                    if confs:
+                        st.markdown("**확인자:** " + ", ".join(
+                            f"{c.get('emp_name','')}({c['emp_no']})" for c in confs))
+        else:
+            st.info("해당 기간 TBM 이력 없음")
+
+# ═══════════════════════════════════════════════════════════════
+#  💰 급여관리 / ⚙️ 계정관리
+# ═══════════════════════════════════════════════════════════════
 def page_salary():
     st.title("💰 급여 관리")
-    st.info("급여 관리 기능은 직원 데이터 안정화 후 추가 개발 예정입니다.")
-
-    employees = sb_select("employees", order="dept_name,emp_no")
-    if employees:
-        df = pd.DataFrame(employees)
-        display_df = df[["emp_no", "name", "dept_name"]].rename(
-            columns={"emp_no": "사번", "name": "이름", "dept_name": "부서"}
-        )
-        display_df["기본급"] = ""
-        display_df["수당"] = ""
-        display_df["공제"] = ""
-        display_df["실수령액"] = ""
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-        st.caption("급여 데이터 입력 기능은 다음 버전에서 제공됩니다.")
-
-# ═══════════════════════════════════════════════════════════════
-#  메뉴 7: ⚙️ 계정 관리
-# ═══════════════════════════════════════════════════════════════
+    st.info("급여 입력/저장 기능은 데이터 안정화 후 추가 예정입니다.")
+    emps=sb_select("employees","employment_status=eq.재직",order="dept_name,emp_no")
+    if emps:
+        df=pd.DataFrame(emps)
+        cols=["emp_no","name","dept_name","position","base_salary","allowance","pay_type","bank_name"]
+        avail=[c for c in cols if c in df.columns]
+        show=df[avail].rename(columns={"emp_no":"사번","name":"이름","dept_name":"부서",
+                "position":"직급","base_salary":"기본급","allowance":"수당",
+                "pay_type":"급여유형","bank_name":"은행"})
+        st.dataframe(show,use_container_width=True,hide_index=True)
 
 def page_settings():
-    st.title("⚙️ 계정 관리")
-
-    st.subheader("현재 계정 정보")
-    st.write("**아이디:** admin")
-    st.write("**역할:** 총괄관리자")
-
-    st.markdown("---")
-    st.subheader("🔑 비밀번호 변경")
-    st.info("비밀번호 관리 기능은 다음 버전에서 제공됩니다.")
-
-    st.markdown("---")
-    st.subheader("📊 시스템 상태")
-    if sb_health_check():
-        st.success("✅ Supabase DB 연결: 정상")
-    else:
-        st.error("❌ Supabase DB 연결: 실패")
-
-    emp_count = len(sb_select("employees"))
-    dept_count = len(sb_select("departments"))
-    att_count = len(sb_select("attendance"))
-    c1, c2, c3 = st.columns(3)
-    c1.metric("부서 수", dept_count)
-    c2.metric("직원 수", emp_count)
-    c3.metric("출근 기록 수", att_count)
+    st.title("⚙️ 시스템 관리")
+    if sb_health(): st.success("✅ Supabase 연결 정상")
+    else: st.error("❌ 연결 실패")
+    ec=len(sb_select("employees","employment_status=eq.재직"))
+    dc=len(sb_select("departments"))
+    ac=len(sb_select("attendance"))
+    tc=len(sb_select("tbm_records"))
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("부서",dc); c2.metric("직원(재직)",ec)
+    c3.metric("출근기록",ac); c4.metric("TBM기록",tc)
 
 # ═══════════════════════════════════════════════════════════════
-#  메인 라우터
+#  메인
 # ═══════════════════════════════════════════════════════════════
-
 def main():
     if not st.session_state['logged_in']:
-        # DB 연결 체크
-        if not sb_health_check():
-            st.error("❌ Supabase DB 연결 실패. Secrets 설정을 확인하세요.")
-        show_login()
-        return
-
-    # 초기 부서 데이터 확인
+        if not sb_health(): st.error("❌ Supabase 연결 실패")
+        show_login(); return
     init_departments()
-
-    # 사이드바 메뉴
     st.sidebar.markdown("### 🐟 보물섬수산 HR")
     st.sidebar.markdown("---")
-    menu = st.sidebar.radio(
-        "메뉴",
-        ["📊 전사현황", "📋 출근입력", "🔍 이력조회",
-         "🏢 부서관리", "👤 직원관리", "💰 급여관리", "⚙️ 계정관리"]
-    )
+    menu=st.sidebar.radio("메뉴",
+        ["📊 전사현황","📋 출근입력","🔍 이력조회","🏢 부서관리",
+         "👤 직원관리","🦺 TBM 안전관리","💰 급여관리","⚙️ 시스템관리"])
     st.sidebar.markdown("---")
-    if st.sidebar.button("🔓 로그아웃", use_container_width=True):
-        st.session_state['logged_in'] = False
-        st.rerun()
-    st.sidebar.caption("v2.0 | Supabase REST API")
+    if st.sidebar.button("🔓 로그아웃",use_container_width=True):
+        st.session_state['logged_in']=False; st.rerun()
+    st.sidebar.caption("v2.1 | TBM + 25개 인사항목")
+    {"📊 전사현황":page_dashboard,"📋 출근입력":page_attendance,
+     "🔍 이력조회":page_history,"🏢 부서관리":page_departments,
+     "👤 직원관리":page_employees,"🦺 TBM 안전관리":page_tbm,
+     "💰 급여관리":page_salary,"⚙️ 시스템관리":page_settings}[menu]()
 
-    # 페이지 라우팅
-    pages = {
-        "📊 전사현황": page_dashboard,
-        "📋 출근입력": page_attendance_input,
-        "🔍 이력조회": page_history,
-        "🏢 부서관리": page_departments,
-        "👤 직원관리": page_employees,
-        "💰 급여관리": page_salary,
-        "⚙️ 계정관리": page_settings,
-    }
-    pages[menu]()
-
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
