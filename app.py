@@ -59,13 +59,28 @@ def sb_health():
 def fmt_time(v):
     """시간 포맷 자동변환: 0900→09:00, 900→09:00, 09:00→09:00"""
     if not v: return ""
-    v=v.strip().replace(":","").replace(" ","")
-    if not v.isdigit(): return v
-    if len(v)==3: v="0"+v        # 900 → 0900
+    v=str(v).strip().replace(":","").replace(" ","")
+    if not v.isdigit(): return str(v)
+    if len(v)==3: v="0"+v
     if len(v)!=4: return v
     h,m=int(v[:2]),int(v[2:])
-    if h>23 or m>59: return v    # 유효성 실패시 원본 반환
+    if h>23 or m>59: return v
     return f"{h:02d}:{m:02d}"
+
+def auto_judge(scheduled, actual):
+    """출근예정시간 vs 실제출근시간 자동 판정 (탄력근무제 대응)
+    Returns: (status, label)  예: ("출근완료","🟢 정상") / ("지각","🔴 +15분")
+    """
+    s=fmt_time(scheduled); a=fmt_time(actual)
+    if not a or ":" not in a: return "",""
+    if not s or ":" not in s: return "출근완료","🟢"
+    try:
+        s_min=int(s[:2])*60+int(s[3:5])
+        a_min=int(a[:2])*60+int(a[3:5])
+    except: return "",""
+    diff=a_min-s_min
+    if diff<=0: return "출근완료",f"🟢 정상 ({-diff}분 일찍)" if diff<0 else "🟢 정상"
+    else: return "지각",f"🔴 지각 (+{diff}분)"
 
 STATUS_OPTIONS = ["출근완료", "지각", "결근", "휴무", "조퇴"]
 DEFAULT_DEPTS = ["회계부","회주방","식당 홀","식당 주방","배송팀","물류팀","해썹가공공장","마트 입점팀"]
@@ -213,27 +228,46 @@ def page_attendance():
     if not emps: st.info(f"{sel}에 직원 없음"); return
     atts=sb_select("attendance",f"date=eq.{ts}")
     am={a["emp_no"]:a for a in atts}
-    st.markdown(f"**{sel}** — {len(emps)}명"); st.divider()
+    st.markdown(f"**{sel}** — {len(emps)}명")
+    st.caption("💡 출근시간 입력 → 저장 시 예정시간 대비 자동 판정 (탄력근무제 대응)")
+    st.divider()
+
+    # 헤더
+    hc=st.columns([1.8,1.3,0.8,1.0,1.3,1.2,0.4])
+    for col,h in zip(hc,["이름","사번/직급","예정","실제출근","자동판정","상태(수동)","✏️"]):
+        col.markdown(f"**{h}**")
+
     nd={}
     for emp in emps:
         ex=am.get(emp["emp_no"],{})
-        c1,c2,c3,c4,c5=st.columns([2,1.2,1.2,1.5,0.5])
+        sched=emp.get("scheduled_time","09:00")
+        c1,c2,c3,c4,c5,c6,c7=st.columns([1.8,1.3,0.8,1.0,1.3,1.2,0.4])
         c1.write(f"👤 {emp['name']}")
         c2.write(f"{emp['emp_no']} / {emp.get('position','')}")
-        # 시간: DB값도 fmt_time 적용하여 표시
-        with c3: at=st.text_input("시간",value=fmt_time(ex.get("actual_time","")),
-                                   placeholder="0900",key=f"a_{emp['emp_no']}",
-                                   label_visibility="collapsed")
+        c3.write(sched)
         with c4:
-            cs=ex.get("status","")
-            idx=(STATUS_OPTIONS.index(cs)+1) if cs in STATUS_OPTIONS else 0
+            at=st.text_input("시간",value=fmt_time(ex.get("actual_time","")),
+                              placeholder="0900",key=f"a_{emp['emp_no']}",
+                              label_visibility="collapsed")
+        # 자동 판정: 입력된 시간과 예정시간 비교
+        auto_st,auto_label=auto_judge(sched,at if at else ex.get("actual_time",""))
+        with c5:
+            if auto_label: st.write(auto_label)
+            else: st.write("—")
+        with c6:
+            # 자동 판정값을 기본으로 설정, 수동 변경 가능
+            db_status=ex.get("status","")
+            if at and auto_st: default=auto_st   # 시간 입력됨 → 자동 판정 우선
+            elif db_status: default=db_status     # DB 기존값
+            else: default=""
+            idx=(STATUS_OPTIONS.index(default)+1) if default in STATUS_OPTIONS else 0
             s=st.selectbox("상태",[""]+STATUS_OPTIONS,index=idx,
                            key=f"s_{emp['emp_no']}",label_visibility="collapsed")
-        with c5:
+        with c7:
             if st.button("✏️",key=f"edit_{emp['emp_no']}",help="직원 정보 수정"):
                 st.session_state['edit_emp_no']=emp['emp_no']
                 st.rerun()
-        nd[emp["emp_no"]]={"actual_time":at,"status":s}
+        nd[emp["emp_no"]]={"actual_time":at,"status":s,"scheduled_time":sched}
 
     # 직원 수정 다이얼로그
     if 'edit_emp_no' in st.session_state:
@@ -247,11 +281,16 @@ def page_attendance():
             recs=[]
             bad_times=[]
             for k,v in nd.items():
-                if not v["status"]: continue
+                if not v["status"] and not v["actual_time"]: continue
                 t=fmt_time(v["actual_time"])
                 if v["actual_time"] and t==v["actual_time"] and ":" not in t:
-                    bad_times.append(k)
-                recs.append({"date":ts,"emp_no":k,"actual_time":t,"status":v["status"]})
+                    bad_times.append(k); continue
+                # 상태가 미선택이지만 시간이 있으면 자동 판정 적용
+                status=v["status"]
+                if not status and t:
+                    status,_=auto_judge(v["scheduled_time"],t)
+                if not status: continue
+                recs.append({"date":ts,"emp_no":k,"actual_time":t,"status":status})
             if bad_times:
                 st.error(f"시간 형식 오류: {', '.join(bad_times)} — 0900 또는 09:00 형식으로 입력"); return
             if recs:
