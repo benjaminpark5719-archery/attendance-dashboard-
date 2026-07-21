@@ -56,6 +56,17 @@ def sb_health():
         return r.ok
     except: return False
 
+def fmt_time(v):
+    """시간 포맷 자동변환: 0900→09:00, 900→09:00, 09:00→09:00"""
+    if not v: return ""
+    v=v.strip().replace(":","").replace(" ","")
+    if not v.isdigit(): return v
+    if len(v)==3: v="0"+v        # 900 → 0900
+    if len(v)!=4: return v
+    h,m=int(v[:2]),int(v[2:])
+    if h>23 or m>59: return v    # 유효성 실패시 원본 반환
+    return f"{h:02d}:{m:02d}"
+
 STATUS_OPTIONS = ["출근완료", "지각", "결근", "휴무", "조퇴"]
 DEFAULT_DEPTS = ["회계부","회주방","식당 홀","식당 주방","배송팀","물류팀","해썹가공공장","마트 입점팀"]
 
@@ -162,7 +173,7 @@ def page_dashboard():
 def page_attendance():
     st.title("📋 부서별 출근 현황 입력")
     td=st.date_input("날짜",value=date.today()); ts=td.strftime("%Y-%m-%d")
-    depts=sb_select("departments",order="name")
+    depts=sb_select("departments",order="sort_order,name")
     if not depts: st.warning("부서 없음"); return
     sel=st.selectbox("🏢 부서 선택",[d["name"] for d in depts])
     emps=sb_select("employees",f"dept_name=eq.{sel}&employment_status=eq.재직",order="emp_no")
@@ -187,8 +198,18 @@ def page_attendance():
     _,cb,_=st.columns([1,1,1])
     with cb:
         if st.button("💾 저장",use_container_width=True,type="primary"):
-            recs=[{"date":ts,"emp_no":k,"actual_time":v["actual_time"],"status":v["status"]}
-                  for k,v in nd.items() if v["status"]]
+            # 시간 포맷 자동변환 적용
+            recs=[]
+            bad_times=[]
+            for k,v in nd.items():
+                if not v["status"]: continue
+                t=fmt_time(v["actual_time"])
+                if v["actual_time"] and t==v["actual_time"] and ":" not in t:
+                    bad_times.append(k)  # 변환 실패
+                recs.append({"date":ts,"emp_no":k,"actual_time":t,"status":v["status"]})
+            if bad_times:
+                st.error(f"시간 형식 오류: {', '.join(bad_times)} — 4자리 숫자(예:0900) 또는 HH:MM 형식으로 입력하세요.")
+                return
             if recs:
                 ok,msg=sb_upsert("attendance",recs,"date,emp_no")
                 if ok: st.success(f"✅ {len(recs)}명 저장 완료!"); st.rerun()
@@ -204,7 +225,7 @@ def page_history():
     with c1: df_=st.date_input("시작일",value=date.today().replace(day=1))
     with c2: dt_=st.date_input("종료일",value=date.today())
     with c3:
-        dpts=sb_select("departments",order="name")
+        dpts=sb_select("departments",order="sort_order,name")
         sd=st.selectbox("부서",["전체"]+[d["name"] for d in dpts])
     logs=sb_select("attendance",f"date=gte.{df_}&date=lte.{dt_}",order="date.desc,emp_no")
     if not logs: st.info("이력 없음"); return
@@ -228,11 +249,13 @@ def page_history():
 # ═══════════════════════════════════════════════════════════════
 def page_departments():
     st.title("🏢 부서 관리")
-    t1,t2=st.tabs(["📋 목록/수정","➕ 등록"])
+    t1,t2,t3=st.tabs(["📋 목록/수정","➕ 등록","🔀 순서 정렬"])
     with t1:
-        for d in sb_select("departments",order="name"):
+        all_depts=sb_select("departments",order="sort_order,name")
+        for d in all_depts:
             ec=len(sb_select("employees",f"dept_name=eq.{d['name']}"))
-            with st.expander(f"🏢 {d['name']} — {ec}명"):
+            so=d.get('sort_order',0) or 0
+            with st.expander(f"[{so}] 🏢 {d['name']} — {ec}명"):
                 with st.form(f"dedit_{d['id']}"):
                     new_name=st.text_input("부서명",value=d['name'],key=f"dn_{d['id']}")
                     c1,c2=st.columns(2)
@@ -245,19 +268,53 @@ def page_departments():
                                     sb_update("employees",{"dept_name":nn},f"dept_name=eq.{d['name']}")
                                     st.success(f"'{d['name']}' → '{nn}' 변경 완료"); st.rerun()
                                 else: st.error("중복 또는 오류")
+                # 삭제: 소속 직원 유무 확인
                 if ec==0:
-                    if st.button("🗑️ 삭제",key=f"dd_{d['id']}"):
-                        sb_delete("departments",f"id=eq.{d['id']}"); st.rerun()
+                    del_key=f"del_confirm_{d['id']}"
+                    if del_key not in st.session_state: st.session_state[del_key]=False
+                    if not st.session_state[del_key]:
+                        if st.button(f"🗑️ {d['name']} 삭제",key=f"dd_{d['id']}"):
+                            st.session_state[del_key]=True; st.rerun()
+                    else:
+                        st.warning(f"정말 '{d['name']}' 부서를 삭제하시겠습니까?")
+                        c1,c2=st.columns(2)
+                        with c1:
+                            if st.button("✅ 예, 삭제",key=f"dy_{d['id']}",type="primary"):
+                                ok=sb_delete("departments",f"id=eq.{d['id']}")
+                                if ok: st.success(f"'{d['name']}' 삭제 완료")
+                                else: st.error("삭제 실패 — DB 제약조건 확인")
+                                st.session_state[del_key]=False; st.rerun()
+                        with c2:
+                            if st.button("❌ 취소",key=f"dc_{d['id']}"):
+                                st.session_state[del_key]=False; st.rerun()
                 else:
-                    st.caption(f"소속 직원 {ec}명 — 삭제 불가")
+                    st.caption(f"⚠️ 소속 직원 {ec}명 — 직원 이동/삭제 후 부서 삭제 가능")
     with t2:
         with st.form("nd"):
             nn=st.text_input("새 부서명")
+            ns=st.number_input("표시 순서",value=len(all_depts)+1,min_value=1)
             if st.form_submit_button("➕ 등록",type="primary"):
                 if nn:
-                    ok,_=sb_insert("departments",{"name":nn.strip()})
+                    ok,_=sb_insert("departments",{"name":nn.strip(),"sort_order":ns})
                     if ok: st.success("등록 완료"); st.rerun()
                     else: st.error("중복 또는 오류")
+    with t3:
+        st.subheader("🔀 부서 표시 순서")
+        st.caption("숫자가 작을수록 위에 표시됩니다. 변경 후 '순서 저장'을 눌러주세요.")
+        all_depts=sb_select("departments",order="sort_order,name")
+        if all_depts:
+            with st.form("dept_sort"):
+                orders={}
+                for d in all_depts:
+                    c1,c2=st.columns([3,1])
+                    c1.write(f"🏢 {d['name']}")
+                    orders[d['id']]=c2.number_input("순번",value=d.get('sort_order',0) or 0,
+                                                     min_value=0,key=f"so_{d['id']}",
+                                                     label_visibility="collapsed")
+                if st.form_submit_button("💾 순서 저장",type="primary"):
+                    for did,so in orders.items():
+                        sb_update("departments",{"sort_order":so},f"id=eq.{did}")
+                    st.success("부서 순서가 저장되었습니다!"); st.rerun()
 
 # ═══════════════════════════════════════════════════════════════
 #  👤 직원관리
@@ -267,7 +324,7 @@ def page_employees():
     t1,t2,t3,t4=st.tabs(["📋 직원 목록/수정","➕ 직원 추가","📥 엑셀 업로드","🗑️ 삭제"])
 
     with t1:
-        depts=sb_select("departments",order="name")
+        depts=sb_select("departments",order="sort_order,name")
         df_=st.selectbox("부서",["전체"]+[d["name"] for d in depts],key="elf")
         if df_=="전체": emps=sb_select("employees",order="dept_name,emp_no")
         else: emps=sb_select("employees",f"dept_name=eq.{df_}",order="emp_no")
@@ -389,7 +446,7 @@ def page_tbm():
         with st.form("tbm_write"):
             td=date.today().strftime("%Y-%m-%d")
             st.write(f"📅 날짜: **{td}**")
-            dept=st.selectbox("대상 부서",[d["name"] for d in sb_select("departments",order="name")])
+            dept=st.selectbox("대상 부서",[d["name"] for d in sb_select("departments",order="sort_order,name")])
             title=st.text_input("TBM 제목",placeholder="예: 수조 주변 미끄럼 주의")
             content=st.text_area("교육 내용",height=200,
                                  placeholder="1. 오늘의 작업 내용\n2. 위험 요인\n3. 안전 대책\n4. 주의사항")
