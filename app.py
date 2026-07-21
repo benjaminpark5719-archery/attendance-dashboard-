@@ -228,19 +228,31 @@ def page_history():
 # ═══════════════════════════════════════════════════════════════
 def page_departments():
     st.title("🏢 부서 관리")
-    t1,t2=st.tabs(["📋 목록","➕ 등록"])
+    t1,t2=st.tabs(["📋 목록/수정","➕ 등록"])
     with t1:
         for d in sb_select("departments",order="name"):
             ec=len(sb_select("employees",f"dept_name=eq.{d['name']}"))
-            c1,c2=st.columns([4,1])
-            c1.write(f"🏢 **{d['name']}** — {ec}명")
-            with c2:
+            with st.expander(f"🏢 {d['name']} — {ec}명"):
+                with st.form(f"dedit_{d['id']}"):
+                    new_name=st.text_input("부서명",value=d['name'],key=f"dn_{d['id']}")
+                    c1,c2=st.columns(2)
+                    with c1:
+                        if st.form_submit_button("✏️ 수정",type="primary"):
+                            nn=new_name.strip()
+                            if nn and nn!=d['name']:
+                                ok,_=sb_update("departments",{"name":nn},f"id=eq.{d['id']}")
+                                if ok:
+                                    sb_update("employees",{"dept_name":nn},f"dept_name=eq.{d['name']}")
+                                    st.success(f"'{d['name']}' → '{nn}' 변경 완료"); st.rerun()
+                                else: st.error("중복 또는 오류")
                 if ec==0:
-                    if st.button("🗑️",key=f"dd_{d['id']}"):
+                    if st.button("🗑️ 삭제",key=f"dd_{d['id']}"):
                         sb_delete("departments",f"id=eq.{d['id']}"); st.rerun()
+                else:
+                    st.caption(f"소속 직원 {ec}명 — 삭제 불가")
     with t2:
         with st.form("nd"):
-            nn=st.text_input("부서명")
+            nn=st.text_input("새 부서명")
             if st.form_submit_button("➕ 등록",type="primary"):
                 if nn:
                     ok,_=sb_insert("departments",{"name":nn.strip()})
@@ -273,18 +285,37 @@ def page_employees():
         st.dataframe(show_df,use_container_width=True,hide_index=True)
         st.caption(f"총 {len(emps)}명")
 
-        # 이름 수정
+        # 직원 정보 수정
         st.markdown("---")
-        st.subheader("✏️ 이름 수정")
-        with st.form("edit_name"):
-            c1,c2=st.columns(2)
-            en=c1.text_input("사번",placeholder="예: ACC-01")
-            nn=c2.text_input("새 이름",placeholder="예: 홍길동")
-            if st.form_submit_button("수정",type="primary"):
-                if en and nn:
-                    ok,_=sb_update("employees",{"name":nn.strip()},f"emp_no=eq.{en.strip()}")
-                    if ok: st.success(f"{en} → {nn} 수정 완료"); st.rerun()
-                    else: st.error("사번 확인")
+        st.subheader("✏️ 직원 정보 수정")
+        emp_options=[f"{e['emp_no']} — {e['name']}" for e in emps]
+        sel_emp_str=st.selectbox("수정할 직원 선택",emp_options,key="edit_sel")
+        sel_no=sel_emp_str.split(" — ")[0] if sel_emp_str else ""
+        sel_emp=next((e for e in emps if e["emp_no"]==sel_no),None)
+        if sel_emp:
+            pos_opts=["","사원","주임","대리","과장","차장","부장","이사","반장"]
+            with st.form("edit_emp"):
+                c1,c2,c3=st.columns(3)
+                new_name=c1.text_input("이름",value=sel_emp.get("name",""))
+                cur_pos=sel_emp.get("position","")
+                pos_idx=pos_opts.index(cur_pos) if cur_pos in pos_opts else 0
+                new_pos=c2.selectbox("직급",pos_opts,index=pos_idx)
+                new_phone=c3.text_input("연락처",value=sel_emp.get("phone",""))
+                c1,c2,c3=st.columns(3)
+                new_hire=c1.text_input("입사일",value=sel_emp.get("hire_date",""))
+                new_hce=c2.text_input("보건증만료일",value=sel_emp.get("health_cert_expiry",""))
+                new_std=c3.text_input("안전교육이수일",value=sel_emp.get("safety_training_date",""))
+                c1,c2=st.columns(2)
+                new_sched=c1.text_input("출근예정시간",value=sel_emp.get("scheduled_time","09:00"))
+                new_memo=c2.text_input("메모",value=sel_emp.get("memo",""))
+                if st.form_submit_button("💾 수정 저장",type="primary"):
+                    upd={"name":new_name.strip(),"position":new_pos,"phone":new_phone.strip(),
+                         "hire_date":new_hire.strip(),"health_cert_expiry":new_hce.strip(),
+                         "safety_training_date":new_std.strip(),"scheduled_time":new_sched.strip(),
+                         "memo":new_memo.strip()}
+                    ok,_=sb_update("employees",upd,f"emp_no=eq.{sel_no}")
+                    if ok: st.success(f"{sel_no} 정보 수정 완료"); st.rerun()
+                    else: st.error("수정 실패")
 
     with t2:
         st.subheader("➕ 직원 1명 추가")
@@ -462,17 +493,49 @@ def page_salary():
                 "pay_type":"급여유형","bank_name":"은행"})
         st.dataframe(show,use_container_width=True,hide_index=True)
 
+DEFAULT_MENU_ORDER=["📊 전사현황","📋 출근입력","🔍 이력조회","🏢 부서관리",
+                    "👤 직원관리","🦺 TBM 안전관리","💰 급여관리","⚙️ 시스템관리"]
+MENU_MAP={"📊 전사현황":page_dashboard,"📋 출근입력":page_attendance,
+          "🔍 이력조회":page_history,"🏢 부서관리":page_departments,
+          "👤 직원관리":page_employees,"🦺 TBM 안전관리":page_tbm,
+          "💰 급여관리":page_salary,"⚙️ 시스템관리":None}
+
+def get_menu_order():
+    if 'menu_order' not in st.session_state:
+        st.session_state['menu_order']=list(DEFAULT_MENU_ORDER)
+    return st.session_state['menu_order']
+
 def page_settings():
     st.title("⚙️ 시스템 관리")
-    if sb_health(): st.success("✅ Supabase 연결 정상")
-    else: st.error("❌ 연결 실패")
-    ec=len(sb_select("employees","employment_status=eq.재직"))
-    dc=len(sb_select("departments"))
-    ac=len(sb_select("attendance"))
-    tc=len(sb_select("tbm_records"))
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("부서",dc); c2.metric("직원(재직)",ec)
-    c3.metric("출근기록",ac); c4.metric("TBM기록",tc)
+    t1,t2=st.tabs(["📊 시스템 상태","🔀 메뉴 순서 관리"])
+    with t1:
+        if sb_health(): st.success("✅ Supabase 연결 정상")
+        else: st.error("❌ 연결 실패")
+        ec=len(sb_select("employees","employment_status=eq.재직"))
+        dc=len(sb_select("departments"))
+        ac=len(sb_select("attendance"))
+        tc=len(sb_select("tbm_records"))
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric("부서",dc); c2.metric("직원(재직)",ec)
+        c3.metric("출근기록",ac); c4.metric("TBM기록",tc)
+    with t2:
+        st.subheader("🔀 메뉴 순서 관리")
+        st.caption("각 메뉴의 순번을 지정하고 '적용' 버튼을 누르세요.")
+        cur=get_menu_order()
+        with st.form("menu_order_form"):
+            new_orders={}
+            for i,m in enumerate(cur):
+                c1,c2=st.columns([3,1])
+                c1.write(m)
+                new_orders[m]=c2.number_input("순번",value=i+1,min_value=1,max_value=8,
+                                              key=f"mo_{m}",label_visibility="collapsed")
+            if st.form_submit_button("✅ 순서 적용",type="primary"):
+                sorted_menus=sorted(new_orders.keys(),key=lambda x:new_orders[x])
+                st.session_state['menu_order']=sorted_menus
+                st.success("메뉴 순서가 변경되었습니다!"); st.rerun()
+        if st.button("🔄 기본 순서로 초기화"):
+            st.session_state['menu_order']=list(DEFAULT_MENU_ORDER)
+            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════
 #  메인
@@ -482,18 +545,16 @@ def main():
         if not sb_health(): st.error("❌ Supabase 연결 실패")
         show_login(); return
     init_departments()
+    ordered=get_menu_order()
     st.sidebar.markdown("### 🐟 보물섬수산 HR")
     st.sidebar.markdown("---")
-    menu=st.sidebar.radio("메뉴",
-        ["📊 전사현황","📋 출근입력","🔍 이력조회","🏢 부서관리",
-         "👤 직원관리","🦺 TBM 안전관리","💰 급여관리","⚙️ 시스템관리"])
+    menu=st.sidebar.radio("메뉴",ordered)
     st.sidebar.markdown("---")
     if st.sidebar.button("🔓 로그아웃",use_container_width=True):
         st.session_state['logged_in']=False; st.rerun()
-    st.sidebar.caption("v2.1 | TBM + 25개 인사항목")
-    {"📊 전사현황":page_dashboard,"📋 출근입력":page_attendance,
-     "🔍 이력조회":page_history,"🏢 부서관리":page_departments,
-     "👤 직원관리":page_employees,"🦺 TBM 안전관리":page_tbm,
-     "💰 급여관리":page_salary,"⚙️ 시스템관리":page_settings}[menu]()
+    st.sidebar.caption("v2.2")
+    page_fn=MENU_MAP.get(menu)
+    if page_fn: page_fn()
+    else: page_settings()
 
 if __name__=="__main__": main()
