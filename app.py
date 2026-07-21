@@ -82,7 +82,20 @@ def auto_judge(scheduled, actual):
     if diff<=0: return "출근완료",f"🟢 정상 ({-diff}분 일찍)" if diff<0 else "🟢 정상"
     else: return "지각",f"🔴 지각 (+{diff}분)"
 
-STATUS_OPTIONS = ["출근완료", "지각", "결근", "휴무", "조퇴"]
+STATUS_OPTIONS = ["출근완료", "지각", "결근", "휴무", "조퇴", "출장", "외근"]
+
+def status_badge(status):
+    """상태별 컬러 배지 HTML"""
+    colors={"출근완료":("#16a34a","white"),"지각":("#dc2626","white"),
+            "결근":("#374151","white"),"휴무":("#eab308","black"),"조퇴":("#f97316","white"),
+            "출장":("#2563eb","white"),"외근":("#2563eb","white"),"미입력":("#9ca3af","white")}
+    bg,fg=colors.get(status,("#9ca3af","white"))
+    return f'<span style="background:{bg};color:{fg};padding:2px 10px;border-radius:12px;font-size:0.85em;font-weight:600">{status}</span>'
+
+def status_sort_key(status):
+    """지각/결근 우선 정렬"""
+    order={"결근":0,"지각":1,"조퇴":2,"출장":3,"외근":4,"출근완료":5,"휴무":6,"미입력":7,"":8}
+    return order.get(status,9)
 DEFAULT_DEPTS = ["회계부","회주방","식당 홀","식당 주방","배송팀","물류팀","해썹가공공장","마트 입점팀"]
 
 def init_departments():
@@ -146,9 +159,36 @@ def page_dashboard():
     if not emps:
         st.info("등록된 직원이 없습니다. '직원관리'에서 먼저 등록하세요."); return
     am = {a["emp_no"]:a for a in atts}
-    depts = sorted(set(e["dept_name"] for e in emps))
+
+    # 전체 상태 집계
+    all_statuses=[am.get(e["emp_no"],{}).get("status","미입력") or "미입력" for e in emps]
+    s_cnt={s:all_statuses.count(s) for s in set(all_statuses)}
+
+    # 컬러 요약 카드
+    st.markdown(f"""<div style="display:flex;gap:12px;flex-wrap:wrap;margin:1rem 0">
+        <div style="background:#16a34a;color:white;padding:12px 24px;border-radius:12px;text-align:center;min-width:120px">
+            <div style="font-size:1.8rem;font-weight:700">{s_cnt.get('출근완료',0)}</div><div>🟢 출근완료</div></div>
+        <div style="background:#dc2626;color:white;padding:12px 24px;border-radius:12px;text-align:center;min-width:120px">
+            <div style="font-size:1.8rem;font-weight:700">{s_cnt.get('지각',0)}</div><div>🔴 지각</div></div>
+        <div style="background:#374151;color:white;padding:12px 24px;border-radius:12px;text-align:center;min-width:120px">
+            <div style="font-size:1.8rem;font-weight:700">{s_cnt.get('결근',0)}</div><div>⬛ 결근</div></div>
+        <div style="background:#eab308;color:black;padding:12px 24px;border-radius:12px;text-align:center;min-width:120px">
+            <div style="font-size:1.8rem;font-weight:700">{s_cnt.get('휴무',0)}</div><div>🟡 휴무</div></div>
+        <div style="background:#f97316;color:white;padding:12px 24px;border-radius:12px;text-align:center;min-width:120px">
+            <div style="font-size:1.8rem;font-weight:700">{s_cnt.get('조퇴',0)+s_cnt.get('출장',0)+s_cnt.get('외근',0)}</div><div>🔵 기타</div></div>
+        <div style="background:#9ca3af;color:white;padding:12px 24px;border-radius:12px;text-align:center;min-width:120px">
+            <div style="font-size:1.8rem;font-weight:700">{s_cnt.get('미입력',0)}</div><div>⬜ 미입력</div></div>
+    </div>""", unsafe_allow_html=True)
+
+    total_working=len(emps)-s_cnt.get('휴무',0)
+    rate=round(s_cnt.get('출근완료',0)/total_working*100,1) if total_working>0 else 0
+    st.metric("전사 출근율",f"{rate}%")
+
+    # 부서별 통계
+    st.markdown("---")
+    st.subheader("🏢 부서별 상세")
+    depts=sorted(set(e["dept_name"] for e in emps))
     stats=[]
-    tot={"부서":"합계","총인원":0,"출근완료":0,"지각":0,"결근":0,"휴무":0,"미입력":0}
     for d in depts:
         de=[e for e in emps if e["dept_name"]==d]
         n=len(de)
@@ -159,27 +199,34 @@ def page_dashboard():
         ni=n-comp-late-abst-off
         w=n-off
         r=f"{round(comp/w*100,1)}%" if w>0 else "0%"
-        row={"부서":d,"총인원":n,"출근완료":comp,"지각":late,"결근":abst,"휴무":off,"미입력":ni,"출근율":r}
-        stats.append(row)
-        for k in tot:
-            if k not in("부서","출근율"): tot[k]+=row.get(k,0)
-    wt=tot["총인원"]-tot["휴무"]
-    tot["출근율"]=f"{round(tot['출근완료']/wt*100,1)}%" if wt>0 else "0%"
-    stats.append(tot)
-    c1,c2,c3,c4,c5=st.columns(5)
-    c1.metric("출근율",tot["출근율"]); c2.metric("출근완료",f"{tot['출근완료']}명")
-    c3.metric("지각",f"{tot['지각']}명"); c4.metric("결근",f"{tot['결근']}명")
-    c5.metric("미입력",f"{tot['미입력']}명")
-    st.markdown("---")
+        stats.append({"부서":d,"총인원":n,"출근완료":comp,"지각":late,"결근":abst,"휴무":off,"미입력":ni,"출근율":r})
     st.dataframe(pd.DataFrame(stats),use_container_width=True,hide_index=True)
+
+    # 직원 상세 - 지각/결근 우선 정렬 + 컬러 배지
     st.markdown("---")
+    st.subheader("👥 전체 직원 상세 (지각·결근 우선)")
     detail=[]
     for e in emps:
         a=am.get(e["emp_no"],{})
+        s=a.get("status","") or "미입력"
         detail.append({"부서":e["dept_name"],"사번":e["emp_no"],"이름":e["name"],
                         "직급":e.get("position",""),"출근예정":e.get("scheduled_time",""),
-                        "실제출근":a.get("actual_time",""),"상태":a.get("status","미입력")})
-    ddf=pd.DataFrame(detail)
+                        "실제출근":a.get("actual_time",""),"상태":s,"_sort":status_sort_key(s)})
+    detail.sort(key=lambda x:x["_sort"])
+    # 배지 표시
+    for row in detail:
+        row["상태"]=row["상태"]  # dataframe에는 텍스트로
+    ddf=pd.DataFrame(detail).drop(columns=["_sort"])
+
+    # 컬러 배지 HTML 목록 (상위 표시)
+    late_absent=[r for r in detail if r["상태"] in ("지각","결근")]
+    if late_absent:
+        badges_html=" ".join(
+            f'{status_badge(r["상태"])} <b>{r["이름"]}</b>({r["부서"]}) '
+            for r in late_absent
+        )
+        st.markdown(f"⚠️ 주의 대상: {badges_html}", unsafe_allow_html=True)
+
     st.dataframe(ddf,use_container_width=True,hide_index=True,height=400)
     st.download_button("📥 엑셀 다운로드",to_excel(ddf,"출근현황"),
                        f"출근현황_{ts}.xlsx",
@@ -228,7 +275,18 @@ def page_attendance():
     if not emps: st.info(f"{sel}에 직원 없음"); return
     atts=sb_select("attendance",f"date=eq.{ts}")
     am={a["emp_no"]:a for a in atts}
-    st.markdown(f"**{sel}** — {len(emps)}명")
+
+    # 부서 내 요약 카드
+    dept_statuses=[am.get(e["emp_no"],{}).get("status","미입력") or "미입력" for e in emps]
+    ds={s:dept_statuses.count(s) for s in set(dept_statuses)}
+    badges=" | ".join([
+        f'🟢 출근 **{ds.get("출근완료",0)}**',
+        f'🔴 지각 **{ds.get("지각",0)}**',
+        f'⬛ 결근 **{ds.get("결근",0)}**',
+        f'🟡 휴무 **{ds.get("휴무",0)}**',
+        f'⬜ 미입력 **{ds.get("미입력",0)}**',
+    ])
+    st.markdown(f"**{sel}** — {len(emps)}명 &nbsp;&nbsp;│&nbsp;&nbsp; {badges}")
     st.caption("💡 출근시간 입력 → 저장 시 예정시간 대비 자동 판정 (탄력근무제 대응)")
     st.divider()
 
