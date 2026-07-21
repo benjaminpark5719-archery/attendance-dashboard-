@@ -167,6 +167,36 @@ def page_dashboard():
                        f"출근현황_{ts}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# ─── 직원 수정 다이얼로그 ─────────────────────────────────────
+@st.dialog("✏️ 직원 정보 수정")
+def _show_edit_dialog(emp_no):
+    emps=sb_select("employees",f"emp_no=eq.{emp_no}")
+    if not emps: st.error("직원 정보를 찾을 수 없습니다."); return
+    e=emps[0]
+    depts=sb_select("departments",order="sort_order,name")
+    dept_names=[d["name"] for d in depts]
+    pos_opts=["","사원","주임","대리","과장","차장","부장","이사","반장"]
+
+    st.caption(f"사번: {e['emp_no']}")
+    new_name=st.text_input("이름",value=e.get("name",""))
+    c1,c2=st.columns(2)
+    cur_pos=e.get("position","")
+    new_pos=c1.selectbox("직급",pos_opts,index=pos_opts.index(cur_pos) if cur_pos in pos_opts else 0)
+    cur_dept=e.get("dept_name","")
+    new_dept=c2.selectbox("부서",dept_names,index=dept_names.index(cur_dept) if cur_dept in dept_names else 0)
+    c1,c2=st.columns(2)
+    new_phone=c1.text_input("연락처",value=e.get("phone",""))
+    new_sched=c2.text_input("출근예정시간",value=e.get("scheduled_time","09:00"))
+    new_memo=st.text_input("메모",value=e.get("memo",""))
+
+    if st.button("💾 저장",type="primary",use_container_width=True):
+        upd={"name":new_name.strip(),"position":new_pos,"dept_name":new_dept,
+             "phone":new_phone.strip(),"scheduled_time":fmt_time(new_sched),
+             "memo":new_memo.strip()}
+        ok,_=sb_update("employees",upd,f"emp_no=eq.{emp_no}")
+        if ok: st.success("수정 완료!"); st.rerun()
+        else: st.error("수정 실패")
+
 # ═══════════════════════════════════════════════════════════════
 #  📋 출근입력
 # ═══════════════════════════════════════════════════════════════
@@ -184,32 +214,43 @@ def page_attendance():
     nd={}
     for emp in emps:
         ex=am.get(emp["emp_no"],{})
-        c1,c2,c3,c4=st.columns([2,1.5,1.2,1.5])
-        c1.write(f"👤 {emp['name']}"); c2.write(emp["emp_no"])
-        with c3: at=st.text_input("시간",value=ex.get("actual_time",""),placeholder="HH:MM",
-                                   key=f"a_{emp['emp_no']}",label_visibility="collapsed")
+        c1,c2,c3,c4,c5=st.columns([2,1.2,1.2,1.5,0.5])
+        c1.write(f"👤 {emp['name']}")
+        c2.write(f"{emp['emp_no']} / {emp.get('position','')}")
+        # 시간: DB값도 fmt_time 적용하여 표시
+        with c3: at=st.text_input("시간",value=fmt_time(ex.get("actual_time","")),
+                                   placeholder="0900",key=f"a_{emp['emp_no']}",
+                                   label_visibility="collapsed")
         with c4:
             cs=ex.get("status","")
             idx=(STATUS_OPTIONS.index(cs)+1) if cs in STATUS_OPTIONS else 0
             s=st.selectbox("상태",[""]+STATUS_OPTIONS,index=idx,
                            key=f"s_{emp['emp_no']}",label_visibility="collapsed")
+        with c5:
+            if st.button("✏️",key=f"edit_{emp['emp_no']}",help="직원 정보 수정"):
+                st.session_state['edit_emp_no']=emp['emp_no']
+                st.rerun()
         nd[emp["emp_no"]]={"actual_time":at,"status":s}
+
+    # 직원 수정 다이얼로그
+    if 'edit_emp_no' in st.session_state:
+        eno=st.session_state.pop('edit_emp_no')
+        _show_edit_dialog(eno)
+
     st.markdown("---")
     _,cb,_=st.columns([1,1,1])
     with cb:
         if st.button("💾 저장",use_container_width=True,type="primary"):
-            # 시간 포맷 자동변환 적용
             recs=[]
             bad_times=[]
             for k,v in nd.items():
                 if not v["status"]: continue
                 t=fmt_time(v["actual_time"])
                 if v["actual_time"] and t==v["actual_time"] and ":" not in t:
-                    bad_times.append(k)  # 변환 실패
+                    bad_times.append(k)
                 recs.append({"date":ts,"emp_no":k,"actual_time":t,"status":v["status"]})
             if bad_times:
-                st.error(f"시간 형식 오류: {', '.join(bad_times)} — 4자리 숫자(예:0900) 또는 HH:MM 형식으로 입력하세요.")
-                return
+                st.error(f"시간 형식 오류: {', '.join(bad_times)} — 0900 또는 09:00 형식으로 입력"); return
             if recs:
                 ok,msg=sb_upsert("attendance",recs,"date,emp_no")
                 if ok: st.success(f"✅ {len(recs)}명 저장 완료!"); st.rerun()
