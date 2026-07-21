@@ -11,10 +11,8 @@ import base64
 from datetime import datetime, date
 import io
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from streamlit_cookies_controller import CookieController
 
 st.set_page_config(page_title="보물섬수산 HR", page_icon="🐟", layout="wide")
-cookies = CookieController()
 
 # ─── Supabase REST API ───────────────────────────────────────
 SB_URL = st.secrets["supabase"]["url"]
@@ -79,9 +77,8 @@ def init_departments():
     if new: sb_insert("departments", new)
 
 if 'logged_in' not in st.session_state:
-    # 쿠키에서 로그인 상태 복원
-    auth = cookies.get("bomulseom_auth")
-    st.session_state['logged_in'] = (auth == "logged_in")
+    # URL 파라미터에서 로그인 상태 복원 (새로고침 시 유지)
+    st.session_state['logged_in'] = (st.query_params.get("auth") == "1")
 
 # ─── 엑셀 다운로드 ──────────────────────────────────────────
 def to_excel(df, sheet='데이터'):
@@ -117,7 +114,7 @@ def show_login():
             if st.form_submit_button("로그인", use_container_width=True, type="primary"):
                 if u=="admin" and p=="admin1234!":
                     st.session_state['logged_in']=True
-                    cookies.set("bomulseom_auth","logged_in")
+                    st.query_params["auth"]="1"
                     st.rerun()
                 else: st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
         st.caption("초기 계정: admin / admin1234!")
@@ -656,7 +653,7 @@ def main():
     st.sidebar.markdown("---")
     if st.sidebar.button("🔓 로그아웃",use_container_width=True):
         st.session_state['logged_in']=False
-        cookies.remove("bomulseom_auth")
+        st.query_params.clear()
         st.rerun()
     st.sidebar.caption("v2.2")
     page_fn=MENU_MAP.get(menu)
