@@ -833,7 +833,12 @@ def page_schedule():
         c3.metric("부서 수", df["dept"].nunique())
 
         if st.button("💾 Supabase 저장 (같은 부서·이름·날짜는 덮어쓰기)", type="primary"):
-            payload = df.assign(source_file=up.name).to_dict("records")
+            import math
+            def _clean(v):
+                if isinstance(v, float) and math.isnan(v): return None
+                return v
+            raw = df.assign(source_file=up.name).to_dict("records")
+            payload = [{k: _clean(v) for k,v in r.items()} for r in raw]
             # shift_type 마스터 upsert
             shift_payload = [{"code":k,"name":v["name"],"plan_in":v["in"],
                               "plan_out":v["out"],"work_type":v["work_type"],
