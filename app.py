@@ -27,28 +27,44 @@ def sb_select(table, params="", order=""):
     url = f"{SB_URL}/rest/v1/{table}?select=*"
     if params: url += f"&{params}"
     if order: url += f"&order={order}"
-    r = requests.get(url, headers=HEADERS)
-    return r.json() if r.ok and r.text.strip() else []
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        return r.json() if r.ok and r.text.strip() else []
+    except Exception:
+        return []
 
 def sb_insert(table, data):
-    r = requests.post(f"{SB_URL}/rest/v1/{table}", json=data,
-                      headers={**HEADERS, "Prefer": "return=representation"})
-    return r.ok, r.text
+    try:
+        r = requests.post(f"{SB_URL}/rest/v1/{table}", json=data,
+                          headers={**HEADERS, "Prefer": "return=representation"}, timeout=10)
+        return r.ok, r.text
+    except Exception as e:
+        return False, str(e)
 
 def sb_upsert(table, data, on_conflict):
-    r = requests.post(f"{SB_URL}/rest/v1/{table}?on_conflict={on_conflict}",
-                      json=data,
-                      headers={**HEADERS, "Prefer": "return=representation,resolution=merge-duplicates"})
-    return r.ok, r.text
+    try:
+        r = requests.post(f"{SB_URL}/rest/v1/{table}?on_conflict={on_conflict}",
+                          json=data,
+                          headers={**HEADERS, "Prefer": "return=representation,resolution=merge-duplicates"},
+                          timeout=10)
+        return r.ok, r.text
+    except Exception as e:
+        return False, str(e)
 
 def sb_update(table, data, filters):
-    r = requests.patch(f"{SB_URL}/rest/v1/{table}?{filters}", json=data,
-                       headers={**HEADERS, "Prefer": "return=representation"})
-    return r.ok, r.text
+    try:
+        r = requests.patch(f"{SB_URL}/rest/v1/{table}?{filters}", json=data,
+                           headers={**HEADERS, "Prefer": "return=representation"}, timeout=10)
+        return r.ok, r.text
+    except Exception as e:
+        return False, str(e)
 
 def sb_delete(table, filters):
-    r = requests.delete(f"{SB_URL}/rest/v1/{table}?{filters}", headers=HEADERS)
-    return r.ok
+    try:
+        r = requests.delete(f"{SB_URL}/rest/v1/{table}?{filters}", headers=HEADERS, timeout=10)
+        return r.ok
+    except Exception:
+        return False
 
 def sb_health():
     try:
@@ -99,10 +115,13 @@ def status_sort_key(status):
 DEFAULT_DEPTS = ["회계부","회주방","식당 홀","식당 주방","배송팀","물류팀","해썹가공공장","마트 입점팀"]
 
 def init_departments():
-    existing = sb_select("departments")
-    names = {d["name"] for d in existing}
-    new = [{"name": n} for n in DEFAULT_DEPTS if n not in names]
-    if new: sb_insert("departments", new)
+    try:
+        existing = sb_select("departments")
+        names = {d["name"] for d in existing}
+        new = [{"name": n} for n in DEFAULT_DEPTS if n not in names]
+        if new: sb_insert("departments", new)
+    except Exception:
+        pass
 
 if 'logged_in' not in st.session_state:
     # URL 파라미터에서 로그인 상태 복원 (새로고침 시 유지)
@@ -676,6 +695,209 @@ def page_tbm():
             st.info("해당 기간 TBM 이력 없음")
 
 # ═══════════════════════════════════════════════════════════════
+#  📋 근무계획 (계획 vs 실적)
+# ═══════════════════════════════════════════════════════════════
+import re as _re, io as _io
+import openpyxl as _openpyxl
+from datetime import timedelta as _td
+
+LEAVE_CODES = {"휴무","연차","대체","예비","무급","결근"}
+WEEKDAYS_KR = ["월","화","수","목","금","토","일"]
+
+def _ptime(v):
+    if v in (None,"","-","(부서기본)"): return None
+    if isinstance(v, datetime): return v.strftime("%H:%M")
+    m = _re.match(r"^(\d{1,2}):(\d{2})", str(v).strip())
+    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
+
+def _load_shift_master(wb):
+    ws = wb["1.근무유형"]
+    shifts = {}
+    for r in range(4, ws.max_row+1):
+        code = ws.cell(r,1).value
+        if not code: break
+        shifts[str(code).strip()] = {
+            "name": ws.cell(r,2).value,
+            "in":   _ptime(ws.cell(r,3).value),
+            "out":  _ptime(ws.cell(r,4).value),
+            "work_type": ws.cell(r,5).value or "근무",
+            "paid": str(ws.cell(r,6).value).strip() == "유급",
+        }
+    dept = {}
+    for r in range(1, ws.max_row+1):
+        if ws.cell(r,1).value and "부서기본시간" in str(ws.cell(r,1).value):
+            rr = r+2
+            while ws.cell(rr,1).value:
+                dept[str(ws.cell(rr,1).value).strip()] = {
+                    "in": _ptime(ws.cell(rr,2).value),
+                    "out": _ptime(ws.cell(rr,3).value)}
+                rr += 1
+            break
+    return shifts, dept
+
+def _parse_plan(file_bytes):
+    wb = _openpyxl.load_workbook(_io.BytesIO(file_bytes), data_only=True)
+    if "2.주간근무계획" not in wb.sheetnames or "1.근무유형" not in wb.sheetnames:
+        raise ValueError("통합양식이 아닙니다. [1.근무유형],[2.주간근무계획] 시트가 필요합니다.")
+    shifts, dept_def = _load_shift_master(wb)
+    ws = wb["2.주간근무계획"]
+    ws_start = ws["C3"].value
+    week_start = ws_start.date() if isinstance(ws_start, datetime) \
+        else datetime.strptime(str(ws_start).strip()[:10], "%Y-%m-%d").date()
+    recs, r, blanks = [], 7, 0
+    while r <= ws.max_row and blanks < 30:
+        name, deptv = ws.cell(r,3).value, ws.cell(r,1).value
+        if not name:
+            blanks += 1; r += 1; continue
+        blanks = 0
+        emp_no, position, note = ws.cell(r,2).value, ws.cell(r,4).value, ws.cell(r,12).value
+        for idx, col in enumerate(range(5,12)):
+            raw = ws.cell(r,col).value
+            code = str(raw).strip() if raw not in (None,"") else "정상"
+            info = shifts.get(code, shifts.get("정상",{}))
+            wt = info.get("work_type","근무")
+            pin, pout = info.get("in"), info.get("out")
+            if wt == "근무" and (pin is None or code == "정상"):
+                dd = dept_def.get(str(deptv).strip() if deptv else "", {})
+                pin = pin or dd.get("in"); pout = pout or dd.get("out")
+            recs.append({
+                "dept": str(deptv).strip() if deptv else "",
+                "emp_no": str(emp_no).strip() if emp_no else "",
+                "emp_name": str(name).strip(),
+                "position": str(position).strip() if position else "",
+                "plan_date": (week_start + _td(days=idx)).isoformat(),
+                "week_start": week_start.isoformat(),
+                "shift_code": code,
+                "work_type": wt,
+                "plan_in":  pin if wt=="근무" else None,
+                "plan_out": pout if wt=="근무" else None,
+                "is_paid": info.get("paid", True),
+                "note": str(note).strip() if note else "",
+            })
+        r += 1
+    return recs, shifts, week_start
+
+def _to_min(t):
+    if t is None or t == "": return None
+    m = _re.search(r"(\d{1,2}):(\d{2})", str(t))
+    return int(m.group(1))*60+int(m.group(2)) if m else None
+
+def _judge(plan_type, plan_in, actual_in, late_min=10):
+    ai, pi = _to_min(actual_in), _to_min(plan_in)
+    if plan_type != "근무":
+        return ("계획외근무",None) if ai is not None else ("정상휴무",None)
+    if ai is None: return ("결근/미기록",None)
+    if pi is None: return ("정상",None)
+    d = ai - pi
+    if d > late_min: return ("지각",d)
+    if d < -late_min: return ("조기출근",d)
+    return ("정상",d)
+
+STATUS_CLR = {"정상":"#2E7D32","정상휴무":"#607D8B","지각":"#C62828",
+              "결근/미기록":"#AD1457","계획외근무":"#EF6C00","조기출근":"#1565C0"}
+
+def page_schedule():
+    st.title("📋 근무계획 관리")
+    tab_up, tab_cmp = st.tabs(["① 계획표 업로드","② 계획 vs 실적"])
+
+    # ── ① 업로드 ──────────────────────────────────────────────
+    with tab_up:
+        st.caption("보물섬수산_통합근무계획표_v1.0.xlsx 를 그대로 업로드하세요.")
+        up = st.file_uploader("주간 근무계획 엑셀", type=["xlsx"])
+        if not up:
+            st.info("📥 통합양식 파일을 위에서 업로드하면 미리보기 후 저장할 수 있습니다.")
+            return
+        try:
+            recs, shifts, ws = _parse_plan(up.getvalue())
+        except Exception as e:
+            st.error(f"파싱 실패: {e}"); return
+
+        df = pd.DataFrame(recs)
+        wk = df["week_start"].iloc[0]
+        st.success(f"인식 완료 — 주차 {wk} · 직원 {df['emp_name'].nunique()}명 · {len(df)}건")
+
+        # wide 미리보기
+        piv = df.copy()
+        piv["요일"] = piv["plan_date"].map(
+            lambda d: WEEKDAYS_KR[(date.fromisoformat(d)-date.fromisoformat(wk)).days])
+        wide = piv.pivot_table(index=["dept","emp_name","position"],
+                               columns="요일", values="shift_code", aggfunc="first")
+        wide = wide.reindex(columns=WEEKDAYS_KR)
+        st.dataframe(wide.reset_index().rename(
+            columns={"dept":"부서","emp_name":"성명","position":"포지션"}),
+            use_container_width=True, hide_index=True)
+
+        c1,c2,c3 = st.columns(3)
+        c1.metric("계획 근무건", int((df["work_type"]=="근무").sum()))
+        c2.metric("휴무/연차건", int((df["work_type"]!="근무").sum()))
+        c3.metric("부서 수", df["dept"].nunique())
+
+        if st.button("💾 Supabase 저장 (같은 부서·이름·날짜는 덮어쓰기)", type="primary"):
+            payload = df.assign(source_file=up.name).to_dict("records")
+            # shift_type 마스터 upsert
+            shift_payload = [{"code":k,"name":v["name"],"plan_in":v["in"],
+                              "plan_out":v["out"],"work_type":v["work_type"],
+                              "is_paid":v["paid"]} for k,v in shifts.items()]
+            ok1, _ = sb_upsert("shift_type", shift_payload, "code")
+            ok2, msg = sb_upsert("work_plan", payload, "dept,emp_name,plan_date")
+            if ok2:
+                st.success(f"✅ 저장 완료 · {len(payload)}건 upsert")
+            else:
+                st.error(f"저장 실패: {msg}")
+
+    # ── ② 계획 vs 실적 ────────────────────────────────────────
+    with tab_cmp:
+        plans_raw = sb_select("work_plan","","week_start.desc")
+        if not plans_raw:
+            st.info("업로드된 계획이 없습니다. ①에서 먼저 업로드하세요."); return
+
+        weeks = sorted({r["week_start"] for r in plans_raw}, reverse=True)
+        wsel = st.selectbox("주차 선택", weeks)
+        pdf = pd.DataFrame([r for r in plans_raw if r["week_start"]==wsel])
+        d0, d1 = pdf["plan_date"].min(), pdf["plan_date"].max()
+
+        # 출근기록 (attendance 테이블: date, emp_no, actual_time, status)
+        att_raw = sb_select("attendance", f"date=gte.{d0}&date=lte.{d1}")
+        # emp_no → emp_name 매핑을 위해 employees 조회
+        emps_raw = sb_select("employees","employment_status=eq.재직")
+        emp_map = {e["emp_no"]: e["name"] for e in emps_raw} if emps_raw else {}
+
+        adf = pd.DataFrame(att_raw) if att_raw else pd.DataFrame(
+            columns=["emp_no","date","actual_time"])
+        if not adf.empty:
+            adf["emp_name"] = adf["emp_no"].map(emp_map)
+            adf["plan_date"] = adf["date"].astype(str).str[:10]
+            m = pdf.merge(adf[["emp_name","plan_date","actual_time"]],
+                          on=["emp_name","plan_date"], how="left")
+        else:
+            m = pdf.assign(actual_time=None)
+
+        res = m.apply(lambda x: _judge(x["work_type"], x.get("plan_in"), x.get("actual_time")),
+                      axis=1, result_type="expand")
+        m["상태"], m["차이분"] = res[0], res[1]
+
+        cnt = m["상태"].value_counts().to_dict()
+        cols = st.columns(6)
+        for i,s in enumerate(["정상","지각","결근/미기록","계획외근무","조기출근","정상휴무"]):
+            cols[i].metric(s, int(cnt.get(s,0)))
+
+        only_issue = st.checkbox("이상 건만 보기 (지각·결근·계획외근무)", value=True)
+        view = m.copy()
+        if only_issue:
+            view = view[view["상태"].isin(["지각","결근/미기록","계획외근무"])]
+        view = view.sort_values(["plan_date","dept","emp_name"])
+
+        show = view[["plan_date","dept","emp_name","shift_code",
+                     "plan_in","actual_time","차이분","상태","note"]].rename(columns={
+            "plan_date":"날짜","dept":"부서","emp_name":"성명","shift_code":"코드",
+            "plan_in":"예정출근","actual_time":"실제출근","차이분":"±분","note":"비고"})
+
+        def _clr(v): return f"color:{STATUS_CLR.get(v,'#000')};font-weight:600"
+        st.dataframe(show.style.map(_clr, subset=["상태"]),
+                     use_container_width=True, hide_index=True)
+        st.caption("지각 임계 ±10분 · '계획외근무'=휴무인데 출근기록 있음 · '결근/미기록'=근무계획인데 출근기록 없음")
+
+# ═══════════════════════════════════════════════════════════════
 #  💰 급여관리 / ⚙️ 계정관리
 # ═══════════════════════════════════════════════════════════════
 def page_salary():
@@ -691,9 +913,10 @@ def page_salary():
                 "pay_type":"급여유형","bank_name":"은행"})
         st.dataframe(show,use_container_width=True,hide_index=True)
 
-DEFAULT_MENU_ORDER=["📊 전사현황","📋 출근입력","🔍 이력조회","🏢 부서관리",
+DEFAULT_MENU_ORDER=["📊 전사현황","📋 출근입력","🗓️ 근무계획","🔍 이력조회","🏢 부서관리",
                     "👤 직원관리","🦺 TBM 안전관리","💰 급여관리","⚙️ 시스템관리"]
 MENU_MAP={"📊 전사현황":page_dashboard,"📋 출근입력":page_attendance,
+          "🗓️ 근무계획":page_schedule,
           "🔍 이력조회":page_history,"🏢 부서관리":page_departments,
           "👤 직원관리":page_employees,"🦺 TBM 안전관리":page_tbm,
           "💰 급여관리":page_salary,"⚙️ 시스템관리":None}
