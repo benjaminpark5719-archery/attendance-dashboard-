@@ -193,7 +193,10 @@ section[data-testid="stSidebar"] * { color:#e9eef5; }
 .callout.warn { background:#fff4e5; border:1px solid #ffd9a8; color:#8a4b00; }
 .callout.ok   { background:#e7f6ec; border:1px solid #b7e2c5; color:#1b6e3a; }
 
-.block-container { padding-top:1.4rem; }
+.block-container { padding-top:3.5rem !important; }
+/* 헤더 글자 상단 잘림 방지: 넉넉한 line-height 확보 */
+.main h1, .main h2, .main h3,
+div[data-testid="stHeading"] { line-height:1.4; margin-top:.2rem; }
 div[data-testid="stDataFrame"] { border-radius:12px; overflow:hidden; }
 @media (max-width:640px){
   .metric-card .value { font-size:1.35rem; }
