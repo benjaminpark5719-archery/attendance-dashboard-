@@ -805,64 +805,48 @@ def page_employee():
     st.subheader("👤 직원관리")
     emp = db_select("employees")
     dept = db_select("departments")
+    
+    # 1. 상단 검색
+    search_kw = st.text_input("🔎 이름 / 사번 / 부서 통합 검색", value="")
+    
+    if not emp.empty and search_kw:
+        emp = emp[
+            emp["name"].str.contains(search_kw, na=False) |
+            emp["emp_no"].str.contains(search_kw, na=False) |
+            emp["department"].str.contains(search_kw, na=False)
+        ]
 
-    kw = st.text_input("🔎 이름 / 사번 / 부서 통합 검색")
-    if st.button("➕ 새 직원 추가", type="primary"):
-        st.session_state["show_add_emp"] = True
-
-    if st.session_state.get("show_add_emp") and _dialog_available():
-        @st.dialog("새 직원 추가")
-        def _add_emp():
-            emp_no = st.text_input("사번")
-            name = st.text_input("이름")
-            d = st.selectbox("부서", dept["name"].tolist() if not dept.empty else [])
-            pos = st.text_input("직급", value="사원")
-            wage = st.number_input("시급(원)", min_value=0, value=10030, step=100)
-            hc = st.date_input("보건증 만료일", value=date.today() + timedelta(days=180))
-            if st.button("등록", type="primary"):
-                db_insert("employees", {
-                    "emp_no": emp_no, "name": name, "department": d, "position": pos,
-                    "hire_date": str(date.today()), "phone": "",
-                    "health_cert_expiry": str(hc), "hourly_wage": int(wage), "status": "재직"})
-                st.session_state["show_add_emp"] = False
-                st.rerun()
-        _add_emp()
-
+    # 2. 직원 목록 및 수정/퇴직/삭제 처리
     if emp.empty:
-        st.info("등록된 직원이 없습니다.")
-        return
-    df = emp.copy()
-    if kw:
-        df = df[df["name"].str.contains(kw, na=False)
-                | df["emp_no"].astype(str).str.contains(kw, na=False)
-                | df["department"].str.contains(kw, na=False)]
-
-    for _, e in df.iterrows():
-        c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
-        c1.markdown(f"**{e['name']}** · {e['emp_no']}")
-        c2.caption(f"{e['department']} / {e.get('position', '')}")
-        c3.markdown("보건증 " + _health_badge(e.get("health_cert_expiry")), unsafe_allow_html=True)
-        if c4.button("수정", key=f"edit_{e['emp_no']}") and _dialog_available():
-            st.session_state["edit_emp_id"] = e["id"]
-
-    if st.session_state.get("edit_emp_id") and _dialog_available():
-        eid = st.session_state["edit_emp_id"]
-        row = emp[emp["id"] == eid]
-        if not row.empty:
-            e = row.iloc[0]
-            @st.dialog(f"{e['name']} 정보 수정")
-            def _edit():
-                pos = st.text_input("직급", value=str(e.get("position", "")))
-                wage = st.number_input("시급(원)", min_value=0, value=int(e.get("hourly_wage", 0)), step=100)
-                hc = st.text_input("보건증 만료일(YYYY-MM-DD)", value=str(e.get("health_cert_expiry", "")))
-                status = st.selectbox("상태", ["재직", "퇴직"],
-                                      index=0 if e.get("status") == "재직" else 1)
-                if st.button("저장", type="primary"):
-                    db_update("employees", eid, {"position": pos, "hourly_wage": int(wage),
-                                                 "health_cert_expiry": hc, "status": status})
-                    st.session_state["edit_emp_id"] = None
-                    st.rerun()
-            _edit()
+        st.info("등록된 직원이 없거나 검색 결과가 없습니다.")
+    else:
+        for idx, row in emp.iterrows():
+            with st.expander(f"[{row['department']}] {row['name']} ({row['emp_no']}) - {row['status']}"):
+                with st.form(key=f"emp_form_{row['id']}"):
+                    c1, c2 = st.columns(2)
+                    name = c1.text_input("이름", value=row["name"])
+                    position = c2.text_input("직급", value=row["position"])
+                    
+                    status = c1.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row["status"]=="재직" else 1)
+                    phone = c2.text_input("연락처", value=row.get("phone", ""))
+                    
+                    # 버튼 배치
+                    btn_col1, btn_col2 = st.columns([1, 1])
+                    submit_update = btn_col1.form_submit_button("💾 정보/상태 저장", type="primary")
+                    submit_delete = btn_col2.form_submit_button("🗑️ 직원 삭제")
+                    
+                    # [저장 / 퇴직 처리 로직]
+                    if submit_update:
+                        patch = {"name": name, "position": position, "status": status, "phone": phone}
+                        if db_update("employees", row["id"], patch):
+                            st.success(f"{name} 님의 정보가 수정(반영)되었습니다.")
+                            st.rerun()
+                    
+                    # [삭제 로직]
+                    if submit_delete:
+                        if db_delete("employees", row["id"]):
+                            st.success(f"{name} 님의 정보가 삭제되었습니다.")
+                            st.rerun()
 
 
 # ── ⑦ TBM 안전관리 ────────────────────────────────────────────────────────────
