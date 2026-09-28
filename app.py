@@ -811,10 +811,12 @@ def page_employee():
     with col_search:
         search_kw = st.text_input("🔎 이름 / 사번 / 부서 통합 검색", value="", placeholder="검색어를 입력하세요...")
     
-    # 부서 목록 가져오기 (기본값 제공)
-    dept_list = dept["name"].tolist() if not dept.empty else ["영업부", "가공1팀", "물류센터", "매장운영"]
+    # 부서 목록 가져오기 (등록된 부서가 없으면 기본 부서 사용)
+    dept_list = dept["name"].tolist() if not dept.empty else ["영업부", "가공1팀", "물류센터", "매장운영", "미래전략기획본부"]
+    if "미래전략기획본부" not in dept_list:
+        dept_list.append("미래전략기획본부")
 
-    # 새 직원 추가 Expander (접었다 펴는 입력창)
+    # 새 직원 추가 Expander
     with st.expander("➕ 새 직원 등록하기", expanded=False):
         with st.form(key="add_employee_form"):
             c1, c2 = st.columns(2)
@@ -866,32 +868,44 @@ def page_employee():
         st.info("등록된 직원이 없거나 검색 결과가 없습니다. 위의 '➕ 새 직원 등록하기'를 통해 직원을 추가해 주세요.")
     else:
         for idx, row in emp.iterrows():
-            with st.expander(f"[{row.get('department', '-')}] {row.get('name', '')} ({row.get('emp_no', '')}) - {row.get('status', '재직')}"):
+            curr_dept = row.get("department", "영업부")
+            dept_idx = dept_list.index(curr_dept) if curr_dept in dept_list else 0
+            
+            with st.expander(f"[{curr_dept}] {row.get('name', '')} ({row.get('emp_no', '')}) - {row.get('status', '재직')}"):
                 with st.form(key=f"emp_form_{row['id']}"):
                     c1, c2 = st.columns(2)
                     name = c1.text_input("이름", value=row.get("name", ""))
                     position = c2.text_input("직급", value=row.get("position", ""))
                     
-                    status = c1.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row.get("status")=="재직" else 1)
-                    phone = c2.text_input("연락처", value=row.get("phone", ""))
+                    # 부서 수정 가능하도록 selectbox 배치
+                    dept_selected = c1.selectbox("부서", dept_list, index=dept_idx)
+                    status = c2.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row.get("status")=="재직" else 1)
+                    
+                    phone = c1.text_input("연락처", value=row.get("phone", ""))
                     
                     # 정보 수정 및 삭제 버튼
                     btn_col1, btn_col2 = st.columns([1, 1])
                     submit_update = btn_col1.form_submit_button("💾 정보/상태 저장", type="primary")
                     submit_delete = btn_col2.form_submit_button("🗑️ 직원 삭제")
                     
-                    # [저장 / 퇴직 처리 로직]
+                    # [저장 / 부서 및 상태 변경 로직]
                     if submit_update:
-                        patch = {"name": name, "position": position, "status": status, "phone": phone}
+                        patch = {
+                            "name": name,
+                            "position": position,
+                            "department": dept_selected,
+                            "status": status,
+                            "phone": phone
+                        }
                         if db_update("employees", row["id"], patch):
-                            st.success(f"{name} 님의 정보가 수정되었습니다.")
+                            st.success(f"{name} 님의 부서 및 정보가 수정되었습니다.")
                             st.rerun()
                     
                     # [삭제 로직]
                     if submit_delete:
                         if db_delete("employees", row["id"]):
                             st.success(f"{name} 님의 정보가 삭제되었습니다.")
-                            st.rerun()   
+                            st.rerun()  
 
 
 # ── ⑦ TBM 안전관리 ────────────────────────────────────────────────────────────
