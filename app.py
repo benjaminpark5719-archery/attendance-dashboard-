@@ -806,9 +806,54 @@ def page_employee():
     emp = db_select("employees")
     dept = db_select("departments")
     
-    # 1. 상단 검색
-    search_kw = st.text_input("🔎 이름 / 사번 / 부서 통합 검색", value="")
+    # 1. 상단 검색 및 새 직원 추가 버튼 UI
+    col_search, col_add = st.columns([3, 1])
+    with col_search:
+        search_kw = st.text_input("🔎 이름 / 사번 / 부서 통합 검색", value="", placeholder="검색어를 입력하세요...")
     
+    # 부서 목록 가져오기 (기본값 제공)
+    dept_list = dept["name"].tolist() if not dept.empty else ["영업부", "가공1팀", "물류센터", "매장운영"]
+
+    # 새 직원 추가 Expander (접었다 펴는 입력창)
+    with st.expander("➕ 새 직원 등록하기", expanded=False):
+        with st.form(key="add_employee_form"):
+            c1, c2 = st.columns(2)
+            new_emp_no = c1.text_input("사번 (예: B005)", value="")
+            new_name = c2.text_input("성명", value="")
+            
+            new_dept = c1.selectbox("부서", dept_list)
+            new_position = c2.text_input("직급 (예: 사원, 과장)", value="사원")
+            
+            new_phone = c1.text_input("연락처", value="010-")
+            new_hire_date = c2.date_input("입사일", value=date.today())
+            
+            new_health_expiry = c1.date_input("보건증 만료일", value=date.today() + timedelta(days=365))
+            new_wage = c2.number_input("시급(원)", value=10000, step=500)
+            
+            submit_add = st.form_submit_button("➕ 직원 등록 완료", type="primary", use_container_width=True)
+            
+            if submit_add:
+                if not new_emp_no or not new_name:
+                    st.warning("사번과 성명은 필수 입력 사항입니다.")
+                else:
+                    new_row = {
+                        "emp_no": new_emp_no,
+                        "name": new_name,
+                        "department": new_dept,
+                        "position": new_position,
+                        "phone": new_phone,
+                        "hire_date": str(new_hire_date),
+                        "health_cert_expiry": str(new_health_expiry),
+                        "hourly_wage": new_wage,
+                        "status": "재직"
+                    }
+                    if db_insert("employees", new_row):
+                        st.success(f"신규 직원 '{new_name}' 님이 성공적으로 등록되었습니다!")
+                        st.rerun()
+
+    st.divider()
+
+    # 2. 검색 필터링
     if not emp.empty and search_kw:
         emp = emp[
             emp["name"].str.contains(search_kw, na=False) |
@@ -816,21 +861,21 @@ def page_employee():
             emp["department"].str.contains(search_kw, na=False)
         ]
 
-    # 2. 직원 목록 및 수정/퇴직/삭제 처리
+    # 3. 직원 목록 및 수정/퇴직/삭제 처리
     if emp.empty:
-        st.info("등록된 직원이 없거나 검색 결과가 없습니다.")
+        st.info("등록된 직원이 없거나 검색 결과가 없습니다. 위의 '➕ 새 직원 등록하기'를 통해 직원을 추가해 주세요.")
     else:
         for idx, row in emp.iterrows():
-            with st.expander(f"[{row['department']}] {row['name']} ({row['emp_no']}) - {row['status']}"):
+            with st.expander(f"[{row.get('department', '-')}] {row.get('name', '')} ({row.get('emp_no', '')}) - {row.get('status', '재직')}"):
                 with st.form(key=f"emp_form_{row['id']}"):
                     c1, c2 = st.columns(2)
-                    name = c1.text_input("이름", value=row["name"])
-                    position = c2.text_input("직급", value=row["position"])
+                    name = c1.text_input("이름", value=row.get("name", ""))
+                    position = c2.text_input("직급", value=row.get("position", ""))
                     
-                    status = c1.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row["status"]=="재직" else 1)
+                    status = c1.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row.get("status")=="재직" else 1)
                     phone = c2.text_input("연락처", value=row.get("phone", ""))
                     
-                    # 버튼 배치
+                    # 정보 수정 및 삭제 버튼
                     btn_col1, btn_col2 = st.columns([1, 1])
                     submit_update = btn_col1.form_submit_button("💾 정보/상태 저장", type="primary")
                     submit_delete = btn_col2.form_submit_button("🗑️ 직원 삭제")
@@ -839,14 +884,14 @@ def page_employee():
                     if submit_update:
                         patch = {"name": name, "position": position, "status": status, "phone": phone}
                         if db_update("employees", row["id"], patch):
-                            st.success(f"{name} 님의 정보가 수정(반영)되었습니다.")
+                            st.success(f"{name} 님의 정보가 수정되었습니다.")
                             st.rerun()
                     
                     # [삭제 로직]
                     if submit_delete:
                         if db_delete("employees", row["id"]):
                             st.success(f"{name} 님의 정보가 삭제되었습니다.")
-                            st.rerun()
+                            st.rerun()   
 
 
 # ── ⑦ TBM 안전관리 ────────────────────────────────────────────────────────────
