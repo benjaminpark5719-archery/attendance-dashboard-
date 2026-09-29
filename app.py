@@ -802,7 +802,7 @@ def _health_badge(expiry):
 
 
 def page_employee():
-    st.subheader("👤 직원관리")
+st.subheader("👤 직원관리")
     emp = db_select("employees")
     dept = db_select("departments")
     
@@ -905,7 +905,7 @@ def page_employee():
                     if submit_delete:
                         if db_delete("employees", row["id"]):
                             st.success(f"{name} 님의 정보가 삭제되었습니다.")
-                            st.rerun()  
+                            st.rerun() 
 
 
 # ── ⑦ TBM 안전관리 ────────────────────────────────────────────────────────────
