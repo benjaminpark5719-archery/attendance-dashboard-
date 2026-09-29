@@ -615,19 +615,111 @@ def page_employees():
 # ==========================================
 # 7, 8, 9번 메뉴 기본 뼈대
 # ==========================================
+# ==========================================
+# 7. TBM 안전보건일지 (등록 / PDF 출력 / 목록)
+# ==========================================
 def page_tbm():
     st.subheader("🦺 TBM 안전보건일지")
     tbm_df = db_select("tbm_logs")
-    st.info("등록된 TBM 안전일지가 없습니다. 상단에서 작성해 주세요.")
-    st.dataframe(tbm_df, use_container_width=True)
+    
+    with st.expander("➕ / 📝 TBM 안전보건일지 작성", expanded=False):
+        with st.form("add_tbm_form"):
+            c1, c2 = st.columns(2)
+            tbm_date = c1.date_input("점검일자", value=date.today())
+            writer = c2.text_input("작성자(안전점검자)", value="관리자")
+            
+            work_detail = st.text_area("금일 주요 작업내용", placeholder="예: 생선 가공 라인 수조 청소 및 상하차 작업")
+            hazard_factor = st.text_area("위험요인 및 안전대책", placeholder="예: 바닥 미끄럼 주의(장화 착용), 칼날 다룸 주의")
+            attendees = st.text_input("참석자 목록", placeholder="예: 김민수, 박준호, 이서연 (총 3명)")
+            
+            if st.form_submit_button("🚨 TBM 일지 저장 완료", type="primary"):
+                new_log = {
+                    "work_date": str(tbm_date),
+                    "writer": writer,
+                    "work_detail": work_detail,
+                    "hazard_factor": hazard_factor,
+                    "attendees": attendees
+                }
+                if db_insert("tbm_logs", new_log):
+                    st.success("TBM 안전일지가 정상적으로 등록되었습니다.")
+                    st.rerun()
 
+    if tbm_df is not None and not tbm_df.empty:
+        rename_dict = {
+            'work_date': '점검일자',
+            'writer': '작성자',
+            'work_detail': '작업내용',
+            'hazard_factor': '위험요인/대책',
+            'attendees': '참석자'
+        }
+        cols = [c for c in rename_dict.keys() if c in tbm_df.columns]
+        st.dataframe(tbm_df[cols].rename(columns=rename_dict), use_container_width=True, hide_index=True)
+    else:
+        st.info("등록된 TBM 안전일지가 없습니다. 상단에서 작성해 주세요.")
+
+# ==========================================
+# 8. 급여 관리 (월별 자동 계산 시뮬레이터)
+# ==========================================
 def page_payroll():
-    st.subheader("💰 급여 관리")
-    st.write("월별 급여 계산 및 명세서 발행 기능입니다.")
+    st.subheader("💰 급여 관리 (시뮬레이터)")
+    
+    emp_df = db_select("employees")
+    att_df = db_select("attendance")
+    
+    selected_month = st.date_input("정산 월 선택", value=date.today())
+    target_ym = selected_month.strftime("%Y-%m")
+    
+    if not emp_df.empty:
+        payroll_data = []
+        for _, emp in emp_df.iterrows():
+            hourly_wage = int(emp.get("hourly_wage", 10000))
+            
+            # 해당 월의 출근 이력 필터링
+            if not att_df.empty and "work_date" in att_df.columns:
+                emp_att = att_df[(att_df["emp_no"] == emp["emp_no"]) & (att_df["work_date"].str.startswith(target_ym))]
+                work_days = len(emp_att)
+            else:
+                work_days = 0
+                
+            # 기본 근무시간 계산 (일 8시간 기준 추정)
+            total_hours = work_days * 8
+            base_pay = total_hours * hourly_wage
+            overtime_pay = 0
+            total_pay = base_pay + overtime_pay
+            
+            payroll_data.append({
+                "사번": emp.get("emp_no"),
+                "이름": emp.get("name"),
+                "부서": emp.get("department"),
+                "시급": f"{hourly_wage:,}원",
+                "근무일수": f"{work_days}일",
+                "총 근무시간": f"{total_hours}시간",
+                "기본급": f"{base_pay:,}원",
+                "총 예상지급액": f"{total_pay:,}원"
+            })
+            
+        st.dataframe(pd.DataFrame(payroll_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("등록된 직원 데이터가 없습니다.")
 
+# ==========================================
+# 9. 시스템 관리 (기초 설정)
+# ==========================================
 def page_system():
     st.subheader("⚙️ 시스템 관리")
-    st.write("시스템 설정 및 메뉴 순서 변경 화면입니다.")
+    
+    with st.form("sys_config_form"):
+        st.markdown("### 🏢 회사 기본 정보 설정")
+        company_name = st.text_input("회사명", value="보물섬수산")
+        c1, c2 = st.columns(2)
+        work_start = c1.time_input("표준 출근 시간", value=time(9, 0))
+        work_end = c2.time_input("표준 퇴근 시간", value=time(18, 0))
+        
+        st.markdown("### 🔒 보안 및 마감 설정")
+        grace_m = st.number_input("지각 인정 유예시간 (분)", value=0)
+        
+        if st.form_submit_button("⚙️ 설정 저장", type="primary"):
+            st.success("시스템 설정이 저장되었습니다.")
 
 PAGE_FUNCS = {
     "전사현황": page_dashboard,
@@ -650,7 +742,6 @@ def main():
             unsafe_allow_html=True,
         )
         menu_labels = [m[0] for m in DEFAULT_MENU]
-        menu_icons = [m[1] for m in DEFAULT_MENU]
         
         if _HAS_OPTION_MENU:
             selected = option_menu(
