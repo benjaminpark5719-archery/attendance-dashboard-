@@ -811,7 +811,7 @@ def page_employee():
     with col_search:
         search_kw = st.text_input("🔎 이름 / 사번 / 부서 통합 검색", value="", placeholder="검색어를 입력하세요...")
     
-    # 부서 목록 가져오기 (등록된 부서가 없으면 기본 부서 사용)
+    # 부서 목록 가져오기 (등록된 부서가 없으면 기본 부서 제공)
     dept_list = dept["name"].tolist() if not dept.empty else ["영업부", "가공1팀", "물류센터", "매장운영", "미래전략기획본부"]
     if "미래전략기획본부" not in dept_list:
         dept_list.append("미래전략기획본부")
@@ -907,7 +907,6 @@ def page_employee():
                         if db_delete("employees", row["id"]):
                             st.success(f"{name} 님의 정보가 삭제되었습니다.")
                             st.rerun()
-
 # ── ⑦ TBM 안전관리 ────────────────────────────────────────────────────────────
 def page_tbm():
     st.subheader("🦺 TBM 안전관리")
