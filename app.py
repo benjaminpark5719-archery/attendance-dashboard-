@@ -290,21 +290,53 @@ def build_shift_template_xlsx(employees_df):
 def page_dashboard():
     st.title("📊 전사 출근 현황 (실시간)")
     st.write("오늘 부서별, 직원별 출근 현황 및 요약 수치를 확인합니다.")
+
+    today_str = str(date.today())
     emp_df = db_select("employees")
     att_df = db_select("attendance")
-    today_str = str(date.today())
-    today_att = att_df[att_df["work_date"] == today_str] if not att_df.empty else pd.DataFrame()
-    
-    total_emp = len(emp_df[emp_df["status"] == "재직"]) if not emp_df.empty else 0
-    present_cnt = len(today_att[today_att["status"] == "정상"]) if not today_att.empty else 0
-    late_cnt = len(today_att[today_att["status"] == "지각"]) if not today_att.empty else 0
-    absent_cnt = max(0, total_emp - (present_cnt + late_cnt))
 
+    # 재직자 기준
+    active_emps = emp_df[emp_df["status"] == "재직"] if (emp_df is not None and not emp_df.empty and "status" in emp_df.columns) else pd.DataFrame()
+    total_active = len(active_emps)
+
+    # 오늘 출근 기록 필터링
+    today_att = pd.DataFrame()
+    if att_df is not None and not att_df.empty and "work_date" in att_df.columns:
+        today_att = att_df[att_df["work_date"] == today_str]
+
+    # 상태별 집계
+    normal_cnt = 0
+    late_cnt = 0
+    if not today_att.empty and "status" in today_att.columns:
+        normal_cnt = len(today_att[today_att["status"] == "정상"])
+        late_cnt = len(today_att[today_att["status"] == "지각"])
+
+    # 미출근/결근 계산 (전체 재직자 - 오늘 출근 기록이 있는 인원)
+    attended_emp_nos = today_att["emp_no"].tolist() if not today_att.empty and "emp_no" in today_att.columns else []
+    absent_cnt = max(0, total_active - len(set(attended_emp_nos)))
+
+    # 상단 요약 카드 출력
     c1, c2, c3, c4 = st.columns(4)
-    with c1: metric_card("전체 재직원", f"{total_emp} 명")
-    with c2: metric_card("정상 출근", f"{present_cnt} 명")
-    with c3: metric_card("지각", f"{late_cnt} 명")
-    with c4: metric_card("미출근/결근", f"{absent_cnt} 명")
+    with c1:
+        metric_card("전체 재직원", f"{total_active}명")
+    with c2:
+        metric_card("정상 출근", f"{normal_cnt}명")
+    with c3:
+        metric_card("지각", f"{late_cnt}명")
+    with c4:
+        metric_card("미출근/결근", f"{absent_cnt}명")
+
+    st.markdown("---")
+    st.subheader("📋 금일 상세 출근 현황표")
+    if not today_att.empty:
+        rename_dict = {
+            'emp_no': '사번', 'name': '이름', 'department': '부서',
+            'work_date': '근무일자', 'actual_start': '출근시간', 'status': '상태'
+        }
+        cols = [c for c in rename_dict.keys() if c in today_att.columns]
+        st.dataframe(today_att[cols].rename(columns=rename_dict), use_container_width=True, hide_index=True)
+    else:
+        st.info("오늘 등록된 출근 내역이 없습니다.")
 
 def page_clockin():
     st.subheader("📋 출근 입력 (현장용)")
