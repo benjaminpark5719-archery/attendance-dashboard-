@@ -441,6 +441,9 @@ def page_schedule():
             view_df.columns = ["부서", "이름", "월", "화", "수", "목", "금", "토", "일"]
             st.dataframe(view_df, use_container_width=True, hide_index=True)
 
+# ==========================================
+# 4. 출퇴근 이력 조회
+# ==========================================
 def page_history():
     st.subheader("🔍 출퇴근 이력 조회")
     att_df = db_select("attendance")
@@ -464,46 +467,158 @@ def page_history():
     else:
         st.info("조회할 출퇴근 기록이 없습니다.")
 
+# ==========================================
+# 5. 부서 관리 (등록 / 수정 / 한글표)
+# ==========================================
 def page_departments():
     st.subheader("🏢 부서 관리")
     dept_df = db_select("departments")
     
+    # 1. 신규 부서 등록 및 수정 폼
+    with st.expander("➕ / ✏️ 부서 추가 및 수정", expanded=False):
+        tab1, tab2 = st.tabs(["신규 부서 추가", "기존 부서 수정/삭제"])
+        
+        with tab1:
+            with st.form("add_dept_form"):
+                new_dept_name = st.text_input("부서명 입력")
+                new_sort_order = st.number_input("정렬 순서", min_value=1, value=len(dept_df)+1 if not dept_df.empty else 1)
+                if st.form_submit_button("부서 추가", type="primary"):
+                    if new_dept_name:
+                        if db_insert("departments", {"name": new_dept_name, "sort_order": new_sort_order}):
+                            st.success(f"'{new_dept_name}' 부서가 추가되었습니다.")
+                            st.rerun()
+                    else:
+                        st.warning("부서명을 입력하세요.")
+                        
+        with tab2:
+            if not dept_df.empty:
+                sel_dept_id = st.selectbox("수정할 부서 선택", dept_df["id"].tolist(), format_func=lambda x: dept_df[dept_df["id"]==x]["name"].values[0])
+                curr_dept = dept_df[dept_df["id"]==sel_dept_id].iloc[0]
+                
+                with st.form("edit_dept_form"):
+                    edit_name = st.text_input("부서명", value=curr_dept["name"])
+                    edit_order = st.number_input("정렬 순서", value=int(curr_dept["sort_order"]))
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.form_submit_button("수정 저장"):
+                            if db_update("departments", sel_dept_id, {"name": edit_name, "sort_order": edit_order}):
+                                st.success("부서 정보가 수정되었습니다.")
+                                st.rerun()
+                    with c2:
+                        if st.form_submit_button("부서 삭제"):
+                            if db_delete("departments", sel_dept_id):
+                                st.warning("부서가 삭제되었습니다.")
+                                st.rerun()
+
+    # 2. 한글 표 출력
     if dept_df is not None and not dept_df.empty:
-        rename_dict = {
-            'id': '부서ID',
-            'name': '부서명',
-            'sort_order': '정렬순서'
-        }
+        rename_dict = {'id': '부서ID', 'name': '부서명', 'sort_order': '정렬순서'}
         display_df = dept_df.rename(columns=rename_dict)
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     else:
         st.info("등록된 부서 정보가 없습니다.")
 
+# ==========================================
+# 6. 직원 관리 (등록 / 수정 / 보건증 강조 / 한글표)
+# ==========================================
 def page_employees():
     st.subheader("👤 직원 관리")
     emp_df = db_select("employees")
+    dept_df = db_select("departments")
+    dept_list = dept_df["name"].tolist() if not dept_df.empty else ["영업부", "가공1팀", "물류센터", "매장운영"]
     
+    # 1. 신규 직원 등록 및 수정 폼
+    with st.expander("➕ / ✏️ 직원 등록 및 정보 수정", expanded=False):
+        tab1, tab2 = st.tabs(["신규 직원 등록", "직원 정보 수정"])
+        
+        with tab1:
+            with st.form("add_emp_form"):
+                c1, c2, c3 = st.columns(3)
+                emp_no = c1.text_input("사번 (예: B005)")
+                name = c2.text_input("이름")
+                dept = c3.selectbox("부서", dept_list)
+                
+                c4, c5, c6 = st.columns(3)
+                position = c4.text_input("직급", value="사원")
+                phone = c5.text_input("연락처", value="010-0000-0000")
+                hourly_wage = c6.number_input("시급(원)", value=10000, step=500)
+                
+                c7, c8 = st.columns(2)
+                hire_d = c7.date_input("입사일", value=date.today())
+                cert_d = c8.date_input("보건증 만료일", value=date.today() + timedelta(days=365))
+                
+                if st.form_submit_button("직원 등록 완료", type="primary"):
+                    new_emp = {
+                        "emp_no": emp_no, "name": name, "department": dept,
+                        "position": position, "phone": phone, "hourly_wage": hourly_wage,
+                        "hire_date": str(hire_d), "health_cert_expiry": str(cert_d), "status": "재직"
+                    }
+                    if db_insert("employees", new_emp):
+                        st.success(f"직원 '{name}' 님이 등록되었습니다.")
+                        st.rerun()
+
+        with tab2:
+            if not emp_df.empty:
+                sel_emp_id = st.selectbox("수정할 직원 선택", emp_df["id"].tolist(), format_func=lambda x: f"{emp_df[emp_df['id']==x]['name'].values[0]} ({emp_df[emp_df['id']==x]['department'].values[0]})")
+                curr_emp = emp_df[emp_df["id"]==sel_emp_id].iloc[0]
+                
+                with st.form("edit_emp_form"):
+                    e1, e2, e3 = st.columns(3)
+                    edit_name = e1.text_input("이름", value=curr_emp["name"])
+                    edit_dept = e2.selectbox("부서", dept_list, index=dept_list.index(curr_emp["department"]) if curr_emp["department"] in dept_list else 0)
+                    edit_status = e3.selectbox("상태", ["재직", "퇴사"], index=0 if curr_emp.get("status")=="재직" else 1)
+                    
+                    e4, e5 = st.columns(2)
+                    edit_wage = e4.number_input("시급", value=int(curr_emp.get("hourly_wage", 10000)))
+                    edit_cert = e5.date_input("보건증 만료일", value=datetime.strptime(str(curr_emp["health_cert_expiry"]), "%Y-%m-%d").date() if curr_emp.get("health_cert_expiry") else date.today())
+                    
+                    if st.form_submit_button("정보 수정 저장", type="primary"):
+                        patch = {
+                            "name": edit_name, "department": edit_dept,
+                            "status": edit_status, "hourly_wage": edit_wage,
+                            "health_cert_expiry": str(edit_cert)
+                        }
+                        if db_update("employees", sel_emp_id, patch):
+                            st.success("직원 정보가 수정되었습니다.")
+                            st.rerun()
+
+    # 2. 한글 표 출력 & 보건증 만료 알림
     if emp_df is not None and not emp_df.empty:
         rename_dict = {
-            'emp_no': '사번',
-            'name': '이름',
-            'department': '부서',
-            'position': '직급',
-            'hire_date': '입사일',
-            'phone': '연락처',
-            'health_cert_expiry': '보건증 만료일',
-            'hourly_wage': '시급',
-            'status': '상태'
+            'emp_no': '사번', 'name': '이름', 'department': '부서',
+            'position': '직급', 'hire_date': '입사일', 'phone': '연락처',
+            'health_cert_expiry': '보건증 만료일', 'hourly_wage': '시급', 'status': '상태'
         }
         cols_to_show = [col for col in rename_dict.keys() if col in emp_df.columns]
         display_df = emp_df[cols_to_show].rename(columns=rename_dict)
         
+        # 보건증 만료 임박 안내 (30일 이내 또는 만료)
+        today = date.today()
+        if 'health_cert_expiry' in emp_df.columns:
+            expired_list = []
+            for _, r in emp_df.iterrows():
+                try:
+                    exp_d = datetime.strptime(str(r['health_cert_expiry']), "%Y-%m-%d").date()
+                    days_left = (exp_d - today).days
+                    if days_left <= 30:
+                        expired_list.append(f"⚠️ **{r['name']}** ({r['department']}) - 만료일: {r['health_cert_expiry']} ({'만료됨' if days_left < 0 else f'{days_left}일 남음'})")
+                except Exception:
+                    pass
+            if expired_list:
+                st.warning("🚨 **보건증 갱신 필요 알림 (30일 이내/만료):**\n\n" + "\n\n".join(expired_list))
+                
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     else:
         st.info("등록된 직원 정보가 없습니다.")
+
+# ==========================================
+# 7, 8, 9번 메뉴 기본 뼈대
+# ==========================================
 def page_tbm():
     st.subheader("🦺 TBM 안전보건일지")
     tbm_df = db_select("tbm_logs")
+    st.info("등록된 TBM 안전일지가 없습니다. 상단에서 작성해 주세요.")
     st.dataframe(tbm_df, use_container_width=True)
 
 def page_payroll():
