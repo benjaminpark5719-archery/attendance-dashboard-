@@ -444,21 +444,63 @@ def page_schedule():
 def page_history():
     st.subheader("🔍 출퇴근 이력 조회")
     att_df = db_select("attendance")
-    if att_df.empty:
+    
+    if att_df is not None and not att_df.empty:
+        rename_dict = {
+            'emp_no': '사번',
+            'name': '이름',
+            'department': '부서',
+            'work_date': '근무일자',
+            'actual_start': '출근시간',
+            'status': '상태'
+        }
+        cols_to_show = [col for col in rename_dict.keys() if col in att_df.columns]
+        display_df = att_df[cols_to_show].rename(columns=rename_dict)
+        
+        if '출근시간' in display_df.columns:
+            display_df['출근시간'] = display_df['출근시간'].astype(str).str.split('.').str[0]
+            
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    else:
         st.info("조회할 출퇴근 기록이 없습니다.")
-        return
-    st.dataframe(att_df, use_container_width=True)
 
 def page_departments():
     st.subheader("🏢 부서 관리")
     dept_df = db_select("departments")
-    st.dataframe(dept_df, use_container_width=True)
+    
+    if dept_df is not None and not dept_df.empty:
+        rename_dict = {
+            'id': '부서ID',
+            'name': '부서명',
+            'sort_order': '정렬순서'
+        }
+        display_df = dept_df.rename(columns=rename_dict)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("등록된 부서 정보가 없습니다.")
 
 def page_employees():
     st.subheader("👤 직원 관리")
     emp_df = db_select("employees")
-    st.dataframe(emp_df, use_container_width=True)
-
+    
+    if emp_df is not None and not emp_df.empty:
+        rename_dict = {
+            'emp_no': '사번',
+            'name': '이름',
+            'department': '부서',
+            'position': '직급',
+            'hire_date': '입사일',
+            'phone': '연락처',
+            'health_cert_expiry': '보건증 만료일',
+            'hourly_wage': '시급',
+            'status': '상태'
+        }
+        cols_to_show = [col for col in rename_dict.keys() if col in emp_df.columns]
+        display_df = emp_df[cols_to_show].rename(columns=rename_dict)
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("등록된 직원 정보가 없습니다.")
 def page_tbm():
     st.subheader("🦺 TBM 안전보건일지")
     tbm_df = db_select("tbm_logs")
