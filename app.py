@@ -802,7 +802,7 @@ def _health_badge(expiry):
 
 
 def page_employee():
-st.subheader("👤 직원관리")
+    st.subheader("👤 직원관리")
     emp = db_select("employees")
     dept = db_select("departments")
     
@@ -874,23 +874,24 @@ st.subheader("👤 직원관리")
             with st.expander(f"[{curr_dept}] {row.get('name', '')} ({row.get('emp_no', '')}) - {row.get('status', '재직')}"):
                 with st.form(key=f"emp_form_{row['id']}"):
                     c1, c2 = st.columns(2)
-                    name = c1.text_input("이름", value=row.get("name", ""))
-                    position = c2.text_input("직급", value=row.get("position", ""))
+                    emp_no = c1.text_input("사번", value=row.get("emp_no", ""))
+                    name = c2.text_input("이름", value=row.get("name", ""))
                     
-                    # 부서 수정 가능하도록 selectbox 배치
-                    dept_selected = c1.selectbox("부서", dept_list, index=dept_idx)
-                    status = c2.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row.get("status")=="재직" else 1)
+                    position = c1.text_input("직급", value=row.get("position", ""))
+                    dept_selected = c2.selectbox("부서", dept_list, index=dept_idx)
                     
-                    phone = c1.text_input("연락처", value=row.get("phone", ""))
+                    status = c1.selectbox("재직 상태", ["재직", "퇴직"], index=0 if row.get("status")=="재직" else 1)
+                    phone = c2.text_input("연락처", value=row.get("phone", ""))
                     
                     # 정보 수정 및 삭제 버튼
                     btn_col1, btn_col2 = st.columns([1, 1])
                     submit_update = btn_col1.form_submit_button("💾 정보/상태 저장", type="primary")
                     submit_delete = btn_col2.form_submit_button("🗑️ 직원 삭제")
                     
-                    # [저장 / 부서 및 상태 변경 로직]
+                    # [저장 / 사번, 부서 및 상태 변경 로직]
                     if submit_update:
                         patch = {
+                            "emp_no": emp_no,
                             "name": name,
                             "position": position,
                             "department": dept_selected,
@@ -898,15 +899,14 @@ st.subheader("👤 직원관리")
                             "phone": phone
                         }
                         if db_update("employees", row["id"], patch):
-                            st.success(f"{name} 님의 부서 및 정보가 수정되었습니다.")
+                            st.success(f"{name} 님의 정보(사번/부서 포함)가 성공적으로 수정되었습니다.")
                             st.rerun()
                     
                     # [삭제 로직]
                     if submit_delete:
                         if db_delete("employees", row["id"]):
                             st.success(f"{name} 님의 정보가 삭제되었습니다.")
-                            st.rerun() 
-
+                            st.rerun()
 
 # ── ⑦ TBM 안전관리 ────────────────────────────────────────────────────────────
 def page_tbm():
