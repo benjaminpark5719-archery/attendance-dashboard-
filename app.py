@@ -1043,114 +1043,110 @@ def page_schedule():
             
     selected_monday = st.date_input("계획 주 (월요일 기준)", value=date.today() - timedelta(days=date.today().weekday()))
     
-    with st.expander("📥 엑셀 업로드 / 직접 등록", expanded=True):
-        tab1, tab2 = st.tabs(["📁 엑셀 일괄 업로드", "✏️ 직접 등록/수정"])
+    tab1, tab2 = st.tabs(["📁 엑셀 일괄 업로드", "✏️ 직접 등록/수정"])
+    
+    # -------------------------------------------------------------------
+    # TAB 1: 엑셀 파일 일괄 업로드
+    # -------------------------------------------------------------------
+    with tab1:
+        st.caption("작성한 근무계획 엑셀 파일(.xlsx)을 업로드하세요.")
+        uploaded_file = st.file_uploader("엑셀 파일 선택", type=["xlsx", "xls"], key="sched_upload")
         
-        # -------------------------------------------------------------------
-        # TAB 1: 엑셀 파일 일괄 업로드
-        # -------------------------------------------------------------------
-        with tab1:
-            st.caption("작성한 근무계획 엑셀 파일(.xlsx)을 업로드하세요.")
-            uploaded_file = st.file_uploader("엑셀 파일 선택", type=["xlsx", "xls"], key="sched_upload")
-            
-            if uploaded_file is not None:
-                try:
-                    df_raw = pd.read_excel(uploaded_file)
-                    st.write("▼ 업로드 데이터 미리보기")
-                    st.dataframe(df_raw.head(5), use_container_width=True)
+        if uploaded_file is not None:
+            try:
+                df_raw = pd.read_excel(uploaded_file)
+                st.write("▼ 업로드 데이터 미리보기")
+                st.dataframe(df_raw.head(5), use_container_width=True)
+                
+                if st.button("🚀 DB 일괄 저장 실행", type="primary"):
+                    cols = [c for c in df_raw.columns if any(day in str(c) for day in ["월", "화", "수", "목", "금", "토", "일"])]
+                    name_col = [c for c in df_raw.columns if "이름" in str(c) or "성명" in str(c)]
+                    name_field = name_col[0] if name_col else df_raw.columns[1]
                     
-                    if st.button("🚀 DB 일괄 저장 실행", type="primary"):
-                        cols = [c for c in df_raw.columns if any(day in str(c) for day in ["월", "화", "수", "목", "금", "토", "일"])]
-                        name_col = [c for c in df_raw.columns if "이름" in str(c) or "성명" in str(c)]
-                        name_field = name_col[0] if name_col else df_raw.columns[1]
+                    success_cnt = 0
+                    for idx, row in df_raw.iterrows():
+                        emp_name = str(row[name_field]).strip()
+                        if not emp_name or emp_name == "nan":
+                            continue
                         
-                        success_cnt = 0
-                        for idx, row in df_raw.iterrows():
-                            emp_name = str(row[name_field]).strip()
-                            if not emp_name or emp_name == "nan":
-                                continue
-                            
-                            # 해당 직원의 emp_no, department 조회
-                            matched_emp = emp_df[emp_df["name"] == emp_name]
-                            emp_no = matched_emp.iloc[0]["emp_no"] if not matched_emp.empty else ""
-                            dept = matched_emp.iloc[0]["department"] if not matched_emp.empty else row.get("부서", "")
-                            
-                            plan_row = {
-                                "week_start": str(selected_monday),
-                                "emp_no": emp_no,
-                                "name": emp_name,
-                                "department": dept,
-                            }
-                            days_keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-                            for d_idx, day_col in enumerate(cols[:7]):
-                                val = str(row[day_col]).strip() if pd.notna(row[day_col]) else "휴무"
-                                plan_row[days_keys[d_idx]] = val
-                                
-                            if db_insert("shift_plans", plan_row):
-                                success_cnt += 1
-                                
-                        st.balloons()
-                        st.success(f"🎉 성공! 총 {success_cnt}명의 주간 스케줄이 DB에 등록되었습니다.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"엑셀 처리 중 오류가 발생했습니다: {e}")
-
-        # -------------------------------------------------------------------
-        # TAB 2: 화면 직접 수정 (개별 등록)
-        # -------------------------------------------------------------------
-        with tab2:
-            st.caption("직원을 선택하여 이번 주 요일별 근무조(오전/오후/야간/휴무)를 직접 입력합니다.")
-            if emp_df.empty:
-                st.warning("등록된 직원이 없습니다. 직원관리 메뉴에서 먼저 직원을 등록해주세요.")
-            else:
-                dept_list = sorted(emp_df["department"].dropna().unique().tolist())
-                sel_dept = st.selectbox("부서 선택", ["전체"] + dept_list, key="sched_tab2_dept")
-                
-                filtered_emp = emp_df if sel_dept == "전체" else emp_df[emp_df["department"] == sel_dept]
-                sel_emp_name = st.selectbox("직원 선택", filtered_emp["name"].tolist(), key="sched_tab2_emp")
-                
-                target_emp = filtered_emp[filtered_emp["name"] == sel_emp_name].iloc[0]
-                
-                # 기존 등록된 근무계획이 있는지 조회
-                existing_plans = db_select("shift_plans")
-                curr_plan = {}
-                if not existing_plans.empty:
-                    match = existing_plans[
-                        (existing_plans["emp_no"] == target_emp["emp_no"]) & 
-                        (existing_plans["week_start"] == str(selected_monday))
-                    ]
-                    if not match.empty:
-                        curr_plan = match.iloc[0].to_dict()
-
-                with st.form("direct_schedule_form"):
-                    st.markdown(f"**👤 {target_emp['name']} ({target_emp['department']})** 님 주간 근무 설정")
-                    
-                    c_mon, c_tue, c_wed, c_thu, c_fri, c_sat, c_sun = st.columns(7)
-                    
-                    opts = ["휴무", "오전", "오후", "야간"]
-                    def_val = lambda k: curr_plan.get(k, "정상" if k not in ["sat", "sun"] else "휴무")
-                    
-                    d_mon = c_mon.selectbox("월", opts, index=opts.index(curr_plan.get("mon", "오전")) if curr_plan.get("mon") in opts else 1)
-                    d_tue = c_tue.selectbox("화", opts, index=opts.index(curr_plan.get("tue", "오전")) if curr_plan.get("tue") in opts else 1)
-                    d_wed = c_wed.selectbox("수", opts, index=opts.index(curr_plan.get("wed", "오전")) if curr_plan.get("wed") in opts else 1)
-                    d_thu = c_thu.selectbox("목", opts, index=opts.index(curr_plan.get("thu", "오전")) if curr_plan.get("thu") in opts else 1)
-                    d_fri = c_fri.selectbox("금", opts, index=opts.index(curr_plan.get("fri", "오전")) if curr_plan.get("fri") in opts else 1)
-                    d_sat = c_sat.selectbox("토", opts, index=opts.index(curr_plan.get("sat", "휴무")) if curr_plan.get("sat") in opts else 0)
-                    d_sun = c_sun.selectbox("일", opts, index=opts.index(curr_plan.get("sun", "휴무")) if curr_plan.get("sun") in opts else 0)
-                    
-                    btn_save = st.form_submit_button("💾 근무계획 저장", type="primary", use_container_width=True)
-                    if btn_save:
-                        save_data = {
+                        matched_emp = emp_df[emp_df["name"] == emp_name]
+                        emp_no = matched_emp.iloc[0]["emp_no"] if not matched_emp.empty else ""
+                        dept = matched_emp.iloc[0]["department"] if not matched_emp.empty else row.get("부서", "")
+                        
+                        plan_row = {
                             "week_start": str(selected_monday),
-                            "emp_no": target_emp["emp_no"],
-                            "name": target_emp["name"],
-                            "department": target_emp["department"],
-                            "mon": d_mon, "tue": d_tue, "wed": d_wed, "thu": d_thu,
-                            "fri": d_fri, "sat": d_sat, "sun": d_sun
+                            "emp_no": emp_no,
+                            "name": emp_name,
+                            "department": dept,
                         }
-                        if db_insert("shift_plans", save_data):
-                            st.success(f"✅ {target_emp['name']} 님의 주간 근무계획이 저장되었습니다!")
-                            st.rerun()
+                        days_keys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                        for d_idx, day_col in enumerate(cols[:7]):
+                            val = str(row[day_col]).strip() if pd.notna(row[day_col]) else "휴무"
+                            plan_row[days_keys[d_idx]] = val
+                            
+                        if db_insert("shift_plans", plan_row):
+                            success_cnt += 1
+                            
+                    st.balloons()
+                    st.success(f"🎉 성공! 총 {success_cnt}명의 주간 스케줄이 DB에 등록되었습니다.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"엑셀 처리 중 오류가 발생했습니다: {e}")
+
+    # -------------------------------------------------------------------
+    # TAB 2: 화면 직접 수정 (개별 등록)
+    # -------------------------------------------------------------------
+    with tab2:
+        st.caption("직원을 선택하여 이번 주 요일별 근무조(오전/오후/야간/휴무)를 직접 입력합니다.")
+        if emp_df.empty:
+            st.warning("등록된 직원이 없습니다. 직원관리 메뉴에서 먼저 직원을 등록해주세요.")
+        else:
+            dept_list = sorted(emp_df["department"].dropna().unique().tolist())
+            sel_dept = st.selectbox("부서 선택", ["전체"] + dept_list, key="sched_tab2_dept")
+            
+            filtered_emp = emp_df if sel_dept == "전체" else emp_df[emp_df["department"] == sel_dept]
+            sel_emp_name = st.selectbox("직원 선택", filtered_emp["name"].tolist(), key="sched_tab2_emp")
+            
+            target_emp = filtered_emp[filtered_emp["name"] == sel_emp_name].iloc[0]
+            
+            existing_plans = db_select("shift_plans")
+            curr_plan = {}
+            if not existing_plans.empty:
+                match = existing_plans[
+                    (existing_plans["emp_no"] == target_emp["emp_no"]) & 
+                    (existing_plans["week_start"] == str(selected_monday))
+                ]
+                if not match.empty:
+                    curr_plan = match.iloc[0].to_dict()
+
+            with st.form("direct_schedule_form"):
+                st.markdown(f"**👤 {target_emp['name']} ({target_emp['department']})** 님 주간 근무 설정")
+                
+                c_mon, c_tue, c_wed, c_thu, c_fri, c_sat, c_sun = st.columns(7)
+                
+                opts = ["휴무", "오전", "오후", "야간"]
+                
+                d_mon = c_mon.selectbox("월", opts, index=opts.index(curr_plan.get("mon", "오전")) if curr_plan.get("mon") in opts else 1)
+                d_tue = c_tue.selectbox("화", opts, index=opts.index(curr_plan.get("tue", "오전")) if curr_plan.get("tue") in opts else 1)
+                d_wed = c_wed.selectbox("수", opts, index=opts.index(curr_plan.get("wed", "오전")) if curr_plan.get("wed") in opts else 1)
+                d_thu = c_thu.selectbox("목", opts, index=opts.index(curr_plan.get("thu", "오전")) if curr_plan.get("thu") in opts else 1)
+                d_fri = c_fri.selectbox("금", opts, index=opts.index(curr_plan.get("fri", "오전")) if curr_plan.get("fri") in opts else 1)
+                d_sat = c_sat.selectbox("토", opts, index=opts.index(curr_plan.get("sat", "휴무")) if curr_plan.get("sat") in opts else 0)
+                d_sun = c_sun.selectbox("일", opts, index=opts.index(curr_plan.get("sun", "휴무")) if curr_plan.get("sun") in opts else 0)
+                
+                btn_save = st.form_submit_button("💾 근무계획 저장", type="primary", use_container_width=True)
+                if btn_save:
+                    save_data = {
+                        "week_start": str(selected_monday),
+                        "emp_no": target_emp["emp_no"],
+                        "name": target_emp["name"],
+                        "department": target_emp["department"],
+                        "mon": d_mon, "tue": d_tue, "wed": d_wed, "thu": d_thu,
+                        "fri": d_fri, "sat": d_sat, "sun": d_sun
+                    }
+                    if db_insert("shift_plans", save_data):
+                        st.success(f"✅ {target_emp['name']} 님의 주간 근무계획이 저장되었습니다!")
+                        st.rerun()
 
     # 하단 주간 순환 근무 달력 표출
     st.markdown("### 주간 순환 근무 달력")
@@ -1165,12 +1161,6 @@ def page_schedule():
             view_df = week_plans[["department", "name", "mon", "tue", "wed", "thu", "fri", "sat", "sun"]].copy()
             view_df.columns = ["부서", "이름", "월", "화", "수", "목", "금", "토", "일"]
             st.dataframe(view_df, use_container_width=True, hide_index=True)
-    # -------------------------------------------------------------------
-    # TAB 2: 기존 화면 직접 수정 (개별/부서별)
-    # -------------------------------------------------------------------
-    with tab2:
-        st.markdown("### ✏️ 주간 근무계획 개별 수정")
-        st.caption("필요시 특정 직원의 근무시간 및 휴무를 직접 변경할 수 있습니다.")
 # ── ⑨ 시스템관리 (메뉴 순서 / StreamlitValueAboveMaxError 수정) ───────────────
 def page_system():
     st.subheader("⚙️ 시스템관리")
