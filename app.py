@@ -1043,6 +1043,7 @@ def page_schedule():
             
     selected_monday = st.date_input("계획 주 (월요일 기준)", value=date.today() - timedelta(days=date.today().weekday()))
     
+    # ── [핵심 수정] expander를 제거하여 탭이 바로 화면에 드러나도록 변경 ──
     tab1, tab2 = st.tabs(["📁 엑셀 일괄 업로드", "✏️ 직접 등록/수정"])
     
     # -------------------------------------------------------------------
