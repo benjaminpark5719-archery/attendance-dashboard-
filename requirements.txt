@@ -1,7 +1,7 @@
-streamlit==1.59.1
-pandas==3.0.2
-openpyxl==3.1.5
-supabase==2.9.1
-Pillow==11.0.0
-streamlit-option-menu==0.4.0
+streamlit
+pandas
+openpyxl
+supabase
+Pillow
+streamlit-option-menu
 requests
