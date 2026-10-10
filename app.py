@@ -136,19 +136,9 @@ USE_SUPABASE = SB is not None
 def _init_persistent_store():
     today = date.today()
     if "store_departments" not in st.session_state:
-        st.session_state.store_departments = [
-            {"id": 1, "name": "영업부", "sort_order": 1},
-            {"id": 2, "name": "가공1팀", "sort_order": 2},
-            {"id": 3, "name": "물류센터", "sort_order": 3},
-            {"id": 4, "name": "매장운영", "sort_order": 4},
-        ]
+        st.session_state.store_departments = []
     if "store_employees" not in st.session_state:
-        st.session_state.store_employees = [
-            {"id": 1, "emp_no": "B001", "name": "김민수", "department": "영업부", "position": "과장", "hire_date": "2021-03-02", "phone": "010-1111-2222", "health_cert_expiry": str(today + timedelta(days=12)), "hourly_wage": 12000, "status": "재직"},
-            {"id": 2, "emp_no": "B002", "name": "이서연", "department": "가공1팀", "position": "사원", "hire_date": "2023-06-01", "phone": "010-3333-4444", "health_cert_expiry": str(today + timedelta(days=45)), "hourly_wage": 10500, "status": "재직"},
-            {"id": 3, "emp_no": "B003", "name": "박준호", "department": "물류센터", "position": "대리", "hire_date": "2022-01-10", "phone": "010-5555-6666", "health_cert_expiry": str(today - timedelta(days=3)), "hourly_wage": 11000, "status": "재직"},
-            {"id": 4, "emp_no": "B004", "name": "최지우", "department": "매장운영", "position": "사원", "hire_date": "2024-02-19", "phone": "010-7777-8888", "health_cert_expiry": str(today + timedelta(days=120)), "hourly_wage": 10200, "status": "재직"},
-        ]
+        st.session_state.store_employees = []
     if "store_attendance" not in st.session_state:
         st.session_state.store_attendance = []
     if "store_shift_plans" not in st.session_state:
