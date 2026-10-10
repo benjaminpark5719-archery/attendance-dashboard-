@@ -135,16 +135,12 @@ SB = get_supabase()
 USE_SUPABASE = SB is not None
 def _init_persistent_store():
     today = date.today()
-    if "store_departments" not in st.session_state:
-        st.session_state.store_departments = []
-    if "store_employees" not in st.session_state:
-        st.session_state.store_employees = []
-    if "store_attendance" not in st.session_state:
-        st.session_state.store_attendance = []
-    if "store_shift_plans" not in st.session_state:
-        st.session_state.store_shift_plans = []
-    if "store_tbm_logs" not in st.session_state:
-        st.session_state.store_tbm_logs = []
+    # 세션에 키 자체가 없을 때만 빈 리스트를 생성합니다. (이미 존재하면 기존 데이터를 절대 건드리지 않고 완벽 보존)
+    st.session_state.setdefault("store_departments", [])
+    st.session_state.setdefault("store_employees", [])
+    st.session_state.setdefault("store_attendance", [])
+    st.session_state.setdefault("store_shift_plans", [])
+    st.session_state.setdefault("store_tbm_logs", [])
 
 def db_select(name):
     _init_persistent_store()
