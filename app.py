@@ -554,15 +554,18 @@ def page_departments():
 # ==========================================
 # 6. 직원 관리 (등록 / 수정 / 보건증 강조 / 한글표)
 # ==========================================
+# ==========================================
+# 6. 직원 관리 (등록 / 수정 / 삭제 / 보건증 강조 / 한글표)
+# ==========================================
 def page_employees():
     st.subheader("👤 직원 관리")
     emp_df = db_select("employees")
     dept_df = db_select("departments")
     dept_list = dept_df["name"].tolist() if not dept_df.empty else ["영업부", "가공1팀", "물류센터", "매장운영"]
     
-    # 1. 신규 직원 등록 및 수정 폼
+    # 1. 신규 직원 등록 및 수정/삭제 폼
     with st.expander("➕ / ✏️ 직원 등록 및 정보 수정", expanded=False):
-        tab1, tab2 = st.tabs(["신규 직원 등록", "직원 정보 수정"])
+        tab1, tab2 = st.tabs(["신규 직원 등록", "직원 정보 수정/삭제"])
         
         with tab1:
             with st.form("add_emp_form"):
@@ -592,7 +595,7 @@ def page_employees():
 
         with tab2:
             if not emp_df.empty:
-                sel_emp_id = st.selectbox("수정할 직원 선택", emp_df["id"].tolist(), format_func=lambda x: f"{emp_df[emp_df['id']==x]['name'].values[0]} ({emp_df[emp_df['id']==x]['department'].values[0]})")
+                sel_emp_id = st.selectbox("관리할 직원 선택", emp_df["id"].tolist(), format_func=lambda x: f"{emp_df[emp_df['id']==x]['name'].values[0]} ({emp_df[emp_df['id']==x]['department'].values[0]})")
                 curr_emp = emp_df[emp_df["id"]==sel_emp_id].iloc[0]
                 
                 with st.form("edit_emp_form"):
@@ -605,15 +608,22 @@ def page_employees():
                     edit_wage = e4.number_input("시급", value=int(curr_emp.get("hourly_wage", 10000)))
                     edit_cert = e5.date_input("보건증 만료일", value=datetime.strptime(str(curr_emp["health_cert_expiry"]), "%Y-%m-%d").date() if curr_emp.get("health_cert_expiry") else date.today())
                     
-                    if st.form_submit_button("정보 수정 저장", type="primary"):
-                        patch = {
-                            "name": edit_name, "department": edit_dept,
-                            "status": edit_status, "hourly_wage": edit_wage,
-                            "health_cert_expiry": str(edit_cert)
-                        }
-                        if db_update("employees", sel_emp_id, patch):
-                            st.success("직원 정보가 수정되었습니다.")
-                            st.rerun()
+                    col_save, col_del = st.columns(2)
+                    with col_save:
+                        if st.form_submit_button("정보 수정 저장", type="primary"):
+                            patch = {
+                                "name": edit_name, "department": edit_dept,
+                                "status": edit_status, "hourly_wage": edit_wage,
+                                "health_cert_expiry": str(edit_cert)
+                            }
+                            if db_update("employees", sel_emp_id, patch):
+                                st.success("직원 정보가 수정되었습니다.")
+                                st.rerun()
+                    with col_del:
+                        if st.form_submit_button("🗑️ 직원 삭제"):
+                            if db_delete("employees", sel_emp_id):
+                                st.warning("직원 정보가 삭제되었습니다.")
+                                st.rerun()
 
     # 2. 한글 표 출력 & 보건증 만료 알림
     if emp_df is not None and not emp_df.empty:
@@ -643,7 +653,6 @@ def page_employees():
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     else:
         st.info("등록된 직원 정보가 없습니다.")
-
 # ==========================================
 # 7, 8, 9번 메뉴 기본 뼈대
 # ==========================================
