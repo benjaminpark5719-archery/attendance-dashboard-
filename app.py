@@ -113,6 +113,11 @@ section[data-testid="stSidebar"] * { color:#e9eef5; }
 div[data-testid="stDataFrame"] { border-radius:12px; overflow:hidden; }
 @media (max-width:640px){ .metric-card .value{font-size:1.35rem;}
   .block-container{padding-left:.6rem;padding-right:.6rem;} }
+/* 사이드바 메뉴(streamlit-option-menu) 글자 상시 표시 */
+section[data-testid="stSidebar"] .nav-link,
+section[data-testid="stSidebar"] .nav-link span { color:#e9eef5 !important; }
+section[data-testid="stSidebar"] div[role="button"] { background-color:#0b1f33 !important; }
+section[data-testid="stSidebar"] ul { background-color:#0b1f33 !important; }
 </style>
 """
 
@@ -451,9 +456,11 @@ def page_history():
            "actual_start": "출근", "status": "상태"}
     cols = [c for c in ren if c in df.columns]
     view = df[cols].rename(columns=ren)
+    if "일자" in view.columns:                      # 있을 때만 정렬 (KeyError 방지)
+        view = view.sort_values("일자", ascending=False)
     if "상태" in view.columns:
         def hi(v): return f"color:{STATUS_COLOR.get(v,'#000')};font-weight:700"
-        st.dataframe(view.sort_values("일자", ascending=False).style.applymap(hi, subset=["상태"]),
+        st.dataframe(view.style.applymap(hi, subset=["상태"]),
                      use_container_width=True, hide_index=True)
     else:
         st.dataframe(view, use_container_width=True, hide_index=True)
@@ -522,12 +529,15 @@ def page_employees():
                 hire = c7.date_input("입사일", value=date.today())
                 cert = c8.text_input("보건증 만료일(YYYY-MM-DD)", value="")
                 if st.form_submit_button("등록", type="primary"):
-                    row = {"emp_no": emp_no, "name": name, COL["dept"]: dept,
-                           "position": pos, COL["scheduled"]: sched,
-                           COL["salary"]: int(salary), "hire_date": str(hire),
-                           COL["cert"]: cert, COL["status"]: "재직"}
-                    if db_insert("employees", row):
-                        st.success(f"'{name}' 등록 완료."); st.rerun()
+                    if not emp_no.strip() or not name.strip():
+                        st.error("사번과 이름은 반드시 입력해야 합니다.")
+                    else:
+                        row = {"emp_no": emp_no.strip(), "name": name.strip(), COL["dept"]: dept,
+                               "position": pos, COL["scheduled"]: sched,
+                               COL["salary"]: int(salary), "hire_date": str(hire),
+                               COL["cert"]: cert, COL["status"]: "재직"}
+                        if db_insert("employees", row):
+                            st.success(f"'{name}' 등록 완료."); st.rerun()
         with t2:
             if not emp.empty:
                 opts = emp["emp_no"].tolist()
@@ -699,9 +709,11 @@ def main():
         if _HAS_OPTION_MENU:
             choice = option_menu(None, [f"{ic} {lb}" for lb, ic in zip(labels, icons)],
                 default_index=0,
-                styles={"container": {"background-color": "transparent"},
-                        "nav-link": {"color": "#e9eef5", "font-size": "14px"},
-                        "nav-link-selected": {"background-color": "#0d6efd"}})
+                styles={"container": {"background-color": "#0b1f33", "padding": "4px 0"},
+                        "nav-link": {"color": "#e9eef5", "font-size": "14px",
+                                     "font-weight": "600", "background-color": "#0b1f33",
+                                     "margin": "2px 6px", "border-radius": "8px"},
+                        "nav-link-selected": {"background-color": "#0d6efd", "color": "#ffffff"}})
             selected = labels[[f"{ic} {lb}" for lb, ic in zip(labels, icons)].index(choice)]
         else:
             selected = st.radio("메뉴 이동", labels,
