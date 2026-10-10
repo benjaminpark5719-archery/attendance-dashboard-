@@ -458,12 +458,7 @@ def page_history():
     view = df[cols].rename(columns=ren)
     if "일자" in view.columns:                      # 있을 때만 정렬 (KeyError 방지)
         view = view.sort_values("일자", ascending=False)
-    if "상태" in view.columns:
-        def hi(v): return f"color:{STATUS_COLOR.get(v,'#000')};font-weight:700"
-        st.dataframe(view.style.applymap(hi, subset=["상태"]),
-                     use_container_width=True, hide_index=True)
-    else:
-        st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(view, use_container_width=True, hide_index=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ⑤ 부서관리 (dept_name 기반)
